@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from checkmarx_dscan.application.config.resolvers import (
+    load_env_file,
+    resolve_credentials,
+    resolve_jenkins_artifact_request,
+    resolve_jenkins_credentials,
+    resolve_project_scan_request,
+    resolve_scan_request,
+)
+from checkmarx_dscan.domain.errors import CheckmarxError, JenkinsError
+
+
+class ResolveConfigTests(unittest.TestCase):
+    def test_resolve_scan_request_normalizes_aliases(self) -> None:
+        request = resolve_scan_request(
+            project_name="demo-project",
+            source=str(ROOT),
+            scan_types="sast, iac-security, sca",
+        )
+        self.assertEqual(request.scan_types, ["sast", "kics", "sca"])
+
+    def test_resolve_credentials_requires_token(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(CheckmarxError):
+                resolve_credentials()
+
+    def test_resolve_jenkins_credentials_require_matching_username_and_token(self) -> None:
+        with mock.patch.dict(os.environ, {"JENKINS_API_TOKEN": "token-only"}, clear=True):
+            with self.assertRaises(JenkinsError):
+                resolve_jenkins_credentials()
+
+    def test_resolve_jenkins_artifact_request_uses_default_artifact_name(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "JENKINS_BASE_URL": "http://jenkins.example",
+                "JENKINS_JOB_URL": "job/demo/job/release_1",
+            },
+            clear=True,
+        ):
+            request = resolve_jenkins_artifact_request()
+        self.assertEqual(request.job_url, "http://jenkins.example/job/demo/job/release_1")
+        self.assertEqual(request.artifact_name, "checkmarx-ast-results.json")
+
+    def test_resolve_jenkins_artifact_request_uses_fallback_build_lookback(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "JENKINS_BASE_URL": "http://jenkins.example",
+                "JENKINS_JOB_URL": "job/demo/job/release_1",
+                "JENKINS_FALLBACK_BUILDS": "7",
+            },
+            clear=True,
+        ):
+            request = resolve_jenkins_artifact_request()
+        self.assertEqual(request.fallback_build_lookback, 7)
+
+    def test_resolve_project_scan_request_uses_defaults(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            request = resolve_project_scan_request(project_name="demo-project")
+        self.assertEqual(request.project_name, "demo-project")
+        self.assertEqual(request.branch, "")
+        self.assertTrue(request.prefer_terminal_scan)
+
+    def test_load_env_file_searches_parent_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            nested = root / "deep" / "child"
+            nested.mkdir(parents=True)
+            env_path = root / ".env"
+            env_path.write_text("CHECKMARX_API_TOKEN=from-parent\n", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                original_cwd = Path.cwd()
+                try:
+                    os.chdir(nested)
+                    load_env_file(".env")
+                    self.assertEqual(os.getenv("CHECKMARX_API_TOKEN"), "from-parent")
+                finally:
+                    os.chdir(original_cwd)
+
+
+if __name__ == "__main__":
+    unittest.main()

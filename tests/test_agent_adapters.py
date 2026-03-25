@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from checkmarx_dscan.domain.errors import CheckmarxError
+from checkmarx_dscan.interfaces.agents.common import (
+	execute_checkmarx_project_scan_tool,
+	execute_checkmarx_scan_tool,
+	execute_jenkins_artifact_tool,
+)
+from checkmarx_dscan.interfaces.agents.mcp import create_mcp_server
+
+
+class AgentAdapterTests(unittest.TestCase):
+	def test_execute_checkmarx_scan_tool_returns_report_dict(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"total_findings": 0}}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_scan_request", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.CheckmarxScanService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_checkmarx_scan_tool(project="demo", source=".", include_raw=False)
+
+		self.assertEqual(payload["summary"]["total_findings"], 0)
+		service_cls.return_value.execute.assert_called_once()
+		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_execute_checkmarx_scan_tool_without_source_uses_latest_project_scan(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"total_findings": 4}}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_project_scan_request", return_value=object()) as resolve_request_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.ProjectScanService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_checkmarx_scan_tool(project="demo", branch="main", include_raw=False)
+
+		self.assertEqual(payload["summary"]["total_findings"], 4)
+		resolve_request_mock.assert_called_once()
+		service_cls.return_value.execute.assert_called_once()
+		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_execute_checkmarx_project_scan_tool_returns_report_dict(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"total_findings": 4}}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_project_scan_request", return_value=object()) as resolve_request_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.ProjectScanService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_checkmarx_project_scan_tool(project="demo", branch="main", include_raw=False)
+
+		self.assertEqual(payload["summary"]["total_findings"], 4)
+		resolve_request_mock.assert_called_once()
+		service_cls.return_value.execute.assert_called_once()
+		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_execute_jenkins_artifact_tool_returns_report_dict(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"report_total_findings": 3}}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_jenkins_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", side_effect=CheckmarxError("skip cx creds")) as resolve_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_jenkins_artifact_request", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.JenkinsArtifactService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_jenkins_artifact_tool(
+				job_url="http://jenkins/job/demo",
+				include_raw=False,
+				checkmarx_base_url="https://us.ast.checkmarx.net",
+				checkmarx_api_token="token",
+				checkmarx_auth_url="https://iam.checkmarx.net/auth/realms/demo",
+				checkmarx_tenant="demo",
+			)
+
+		self.assertEqual(payload["summary"]["report_total_findings"], 3)
+		resolve_credentials_mock.assert_called_once_with(
+			base_url="https://us.ast.checkmarx.net",
+			api_token="token",
+			auth_url="https://iam.checkmarx.net/auth/realms/demo",
+			tenant="demo",
+			timeout=None,
+		)
+		service_cls.return_value.execute.assert_called_once()
+		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_create_mcp_server_registers_expected_tools(self) -> None:
+		server = create_mcp_server()
+		tools = asyncio.run(server.list_tools())
+		tool_names = {tool.name for tool in tools}
+
+		self.assertIn("checkmarx_scan", tool_names)
+		self.assertIn("jenkins_artifact", tool_names)
+		self.assertEqual(tool_names, {"checkmarx_scan", "jenkins_artifact"})
+
+	def test_checkmarx_scan_tool_returns_structured_error_for_missing_credentials(self) -> None:
+		server = create_mcp_server()
+		with mock.patch.dict("os.environ", {}, clear=True):
+			_, result = asyncio.run(server.call_tool(
+				"checkmarx_scan",
+				{
+					"project": "demo",
+					"scan_mode": "latest_project",
+					"include_raw": False,
+					"env_file": "__missing__.env",
+				},
+			))
+
+		self.assertFalse(result["ok"])
+		self.assertEqual(result["tool"], "checkmarx_scan")
+		self.assertEqual(result["error"]["code"], "missing_checkmarx_api_token")
+		self.assertEqual(result["error"]["category"], "configuration")
+		self.assertIn("CHECKMARX_API_TOKEN", result["error"]["message"])
+
+
+if __name__ == "__main__":
+	unittest.main()
