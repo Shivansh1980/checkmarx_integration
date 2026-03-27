@@ -28,9 +28,25 @@ class AgentAdapterTests(unittest.TestCase):
 			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_scan_request", return_value=object()), \
 			mock.patch("checkmarx_dscan.interfaces.agents.common.CheckmarxScanService") as service_cls:
 			service_cls.return_value.execute.return_value = mock_report
-			payload = execute_checkmarx_scan_tool(project="demo", source=".", include_raw=False)
+			payload = execute_checkmarx_scan_tool(project="demo", source=".", scan_mode="upload", include_raw=False)
 
 		self.assertEqual(payload["summary"]["total_findings"], 0)
+		service_cls.return_value.execute.assert_called_once()
+		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_execute_checkmarx_scan_tool_auto_mode_prefers_latest_project_even_with_source(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"total_findings": 4}}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_project_scan_request", return_value=object()) as resolve_request_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.ProjectScanService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_checkmarx_scan_tool(project="demo", source=".", include_raw=False)
+
+		self.assertEqual(payload["summary"]["total_findings"], 4)
+		resolve_request_mock.assert_called_once()
 		service_cls.return_value.execute.assert_called_once()
 		mock_report.to_dict.assert_called_once_with(include_raw=False)
 
@@ -49,6 +65,29 @@ class AgentAdapterTests(unittest.TestCase):
 		resolve_request_mock.assert_called_once()
 		service_cls.return_value.execute.assert_called_once()
 		mock_report.to_dict.assert_called_once_with(include_raw=False)
+
+	def test_execute_checkmarx_scan_tool_projects_mode_returns_catalog(self) -> None:
+		catalog_payload = {
+			"ok": True,
+			"mode": "projects",
+			"summary": {"accessible_projects": 2, "match_count": 1},
+			"matches": [{"match_type": "exact_name", "project": {"name": "demo-project"}}],
+		}
+
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.CheckmarxProjectCatalogService") as service_cls:
+			service_cls.return_value.execute.return_value = catalog_payload
+			payload = execute_checkmarx_scan_tool(
+				scan_mode="projects",
+				project_query="demo",
+				include_raw=False,
+			)
+
+		self.assertTrue(payload["ok"])
+		self.assertEqual(payload["mode"], "projects")
+		self.assertEqual(payload["summary"]["accessible_projects"], 2)
+		service_cls.return_value.execute.assert_called_once_with(project_query="demo", include_raw=False)
 
 	def test_execute_checkmarx_project_scan_tool_returns_report_dict(self) -> None:
 		mock_report = mock.Mock()
@@ -123,6 +162,23 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertEqual(result["error"]["code"], "missing_checkmarx_api_token")
 		self.assertEqual(result["error"]["category"], "configuration")
 		self.assertIn("CHECKMARX_API_TOKEN", result["error"]["message"])
+
+	def test_checkmarx_scan_tool_accepts_report_profile_argument(self) -> None:
+		server = create_mcp_server()
+		with mock.patch("checkmarx_dscan.interfaces.agents.mcp.execute_checkmarx_scan_tool", return_value={"ok": True, "mode": "projects"}) as execute_mock:
+			_, result = asyncio.run(server.call_tool(
+				"checkmarx_scan",
+				{
+					"project": "",
+					"scan_mode": "projects",
+					"include_raw": False,
+					"report_profile": "compact",
+				},
+			))
+
+		self.assertTrue(result["ok"])
+		execute_mock.assert_called_once()
+		self.assertEqual(execute_mock.call_args.kwargs["report_profile"], "compact")
 
 
 if __name__ == "__main__":

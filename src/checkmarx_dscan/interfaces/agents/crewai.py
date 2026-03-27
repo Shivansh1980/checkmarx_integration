@@ -71,10 +71,12 @@ else:
 		scan_lookback: int | None = Field(default=None, description="How many recent scans to inspect when picking the latest scan.")
 
 	class CheckmarxScanToolInput(BaseModel):
-		project: str = Field(..., description="Checkmarx project name to scan.")
-		source: str = Field(default="", description="Directory, file, or zip archive to upload and scan. Leave empty to inspect the latest existing project scan.")
+		project: str = Field(default="", description="Checkmarx project name to scan, or an approximate project query when scan_mode=projects.")
+		project_query: str = Field(default="", description="Optional explicit project query used only when scan_mode=projects.")
+		source: str = Field(default="", description="Directory, file, or zip archive to upload and scan. It is used only when scan_mode=upload.")
 		env_file: str = Field(default=".env", description="Path to a .env file containing Checkmarx settings.")
-		scan_mode: str = Field(default="auto", description="auto selects upload when source is provided, otherwise latest_project. Allowed values: auto, upload, latest_project.")
+		scan_mode: str = Field(default="auto", description="auto defaults to latest_project. Use upload only when the user explicitly wants to upload local source. Allowed values: auto, upload, latest_project, projects.")
+		report_profile: str = Field(default="compact", description="Accepted for compatibility with MCP clients. Current responses are compact by default.")
 		branch: str = Field(default="", description="Branch name associated with the scan.")
 		scan_types: str = Field(default="", description="Comma-separated scan engines such as sast, sca, iac-security.")
 		timeout: int | None = Field(default=None, description="Per-request HTTP timeout in seconds.")
@@ -112,6 +114,7 @@ else:
 		env_file: str = Field(default=".env", description="Path to a .env file containing Jenkins settings.")
 		build_number: int | None = Field(default=None, description="Specific build number to inspect. If omitted, the tool tracks the active build or falls back to the latest completed build.")
 		artifact_name: str = Field(default="", description="Exact artifact file name to retrieve. Defaults to checkmarx-ast-results.json.")
+		report_profile: str = Field(default="compact", description="Accepted for compatibility with MCP clients. Current responses are compact by default.")
 		timeout: int | None = Field(default=None, description="Per-request HTTP timeout in seconds.")
 		poll_interval: int | None = Field(default=None, description="Seconds between Jenkins build and artifact checks.")
 		poll_timeout: int | None = Field(default=None, description="Maximum wait time in seconds; 0 disables the timeout.")

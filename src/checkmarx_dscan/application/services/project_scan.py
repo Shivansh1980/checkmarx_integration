@@ -5,6 +5,7 @@ from typing import Callable
 from ...domain.errors import CheckmarxError
 from ...domain.models import CheckmarxCredentials, ProjectScanExecutionReport, ProjectScanRequest
 from ...shared.utils import pick, pick_str, utc_now_iso
+from .project_catalog import build_project_lookup_error, rank_project_matches, resolve_project_match
 from ..reporting.report_builder import build_project_scan_execution_report, extract_scan_status, format_status_details
 from ...infrastructure.clients.checkmarx import CheckmarxClient
 
@@ -30,15 +31,23 @@ class ProjectScanService:
         progress_callback: ProgressCallback | None = None,
     ) -> ProjectScanExecutionReport:
         self.client.authenticate()
-        project = self.client.get_project_by_name(request.project_name)
-        if project is None:
-            raise CheckmarxError(f"Checkmarx project was not found: {request.project_name}")
+        available_projects = self.client.get_all_projects()
+        resolved_match = resolve_project_match(available_projects, request.project_name)
+        if resolved_match is None:
+            matches = rank_project_matches(available_projects, request.project_name)
+            raise CheckmarxError(build_project_lookup_error(request.project_name, matches))
+
+        project = resolved_match["project"]
 
         project_id = pick_str(project, "id", "ID")
         if not project_id:
             raise CheckmarxError("Checkmarx did not return a project ID")
         if progress_callback is not None:
-            progress_callback(f"Using project: {pick_str(project, 'name', 'Name') or request.project_name} ({project_id})")
+            resolved_name = pick_str(project, "name", "Name") or request.project_name
+            if resolved_name != request.project_name:
+                progress_callback(f"Resolved project query '{request.project_name}' to: {resolved_name} ({project_id})")
+            else:
+                progress_callback(f"Using project: {resolved_name} ({project_id})")
 
         latest_scan = self.client.get_latest_project_scan(
             project_id,

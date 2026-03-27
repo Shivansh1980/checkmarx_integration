@@ -15,13 +15,13 @@ from ...shared.utils import first_non_empty
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Create a Checkmarx One upload scan for a specific project and emit an agent-friendly JSON report.",
+		description="Fetch the latest existing Checkmarx scan for a project by default, or explicitly upload local source when requested.",
 	)
 	parser.add_argument("project_name", nargs="?", help="Checkmarx project name")
 	parser.add_argument("--project", help="Checkmarx project name override")
 	parser.add_argument("--env-file", default=".env", help="Path to the .env file to load before reading settings")
-	parser.add_argument("--source", help="Directory, source file, or zip archive to scan. Omit it to inspect the latest existing project scan.")
-	parser.add_argument("--scan-mode", choices=["auto", "upload", "latest_project"], default="auto", help="auto uses upload when --source is provided, otherwise latest_project")
+	parser.add_argument("--source", help="Directory, source file, or zip archive to scan. Used only with --scan-mode upload.")
+	parser.add_argument("--scan-mode", choices=["auto", "upload", "latest_project"], default="auto", help="auto defaults to latest_project. Use upload only when you explicitly want to send local source to Checkmarx")
 	parser.add_argument("--branch", help="Branch name associated with the scan")
 	parser.add_argument("--scan-types", help="Comma-separated scan engines. Supported values: sast, sca, iac-security")
 	parser.add_argument("--timeout", type=int, help="Per-request timeout in seconds")
@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
 	)
 	resolved_mode = args.scan_mode
 	if resolved_mode == "auto":
-		resolved_mode = "upload" if (args.source or "").strip() else "latest_project"
+		resolved_mode = "latest_project"
 
 	if resolved_mode == "upload":
 		request = resolve_scan_request(

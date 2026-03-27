@@ -15,7 +15,7 @@ If you attach this project as an MCP server to an agent client such as Cody, the
 Recommended tool selection order:
 
 - `checkmarx_scan`
-        Use this for both direct Checkmarx workflows. Provide `source` when you want to create a new upload scan. Omit `source`, or set `scan_mode=latest_project`, when you want the latest existing Checkmarx scan for a project and optional branch.
+                        Use this for all direct Checkmarx workflows. By default it resolves the requested project against accessible Checkmarx projects and fetches the latest existing scan for that project and optional branch. Set `scan_mode=projects` when you need to enumerate accessible projects and find the best match for a user-supplied project name. Use `scan_mode=upload` only when you explicitly want to upload local source to Checkmarx and start a new scan.
 - `jenkins_artifact`
         Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters.
 
@@ -41,7 +41,8 @@ Recommended agent workflow:
 1. Read `agent_report.vulnerability_summary` and `agent_report.engine_coverage`.
 2. Inspect `agent_report.top_actionable_issues` or `agent_report.top_fix_targets`.
 3. If more context is needed, inspect `findings` or `agent_report.vulnerabilities`.
-4. If native Checkmarx response details are required, call the tool again with `include_raw=true`.
+4. If the project name is ambiguous, call `checkmarx_scan` with `scan_mode=projects` and inspect `matches` or `project_resolution.best_match`.
+5. If native Checkmarx response details are required, call the tool again with `include_raw=true`.
 
 ## Architecture
 
@@ -469,6 +470,8 @@ If your MCP client launches the server from a directory other than the repositor
 - pass `env_file` as an absolute path in the tool call, or
 - inject `CHECKMARX_BASE_URL` and `CHECKMARX_API_TOKEN` directly into the MCP server process environment.
 
+For local workspace use, the server also supports `CHECKMARX_DSCAN_ENV_FILE` or `CHECKMARX_ENV_FILE` in the MCP server process environment. Point that variable at your workspace `.env` file when you want the server to load credentials from the repo without duplicating them in the client config.
+
 Because the MCP server uses the same application services as the CLI and CrewAI tools, any improvements to scan normalization, Jenkins enrichment, or reporting automatically flow to MCP clients as well.
 
 ## Troubleshooting
@@ -495,6 +498,20 @@ Check these next:
 ### Checkmarx scan works but Jenkins retrieval does not
 
 That is expected if Checkmarx credentials are valid but Jenkins credentials are not. The two flows are independent.
+
+### MCP call fails with `Cannot read properties of undefined (reading 'invoke')`
+
+That error is typically from the MCP client layer, not from this Python server. The usual causes are:
+
+1. The Copilot MCP client has stale tool metadata after a schema change. Restart the MCP server or reload the VS Code window.
+2. The MCP server is not connected or failed during startup, so the client has no live `checkmarx_scan` tool instance to invoke.
+3. The MCP server was launched without the environment it needs.
+
+Recommended setup for Copilot MCP:
+
+1. Prefer injecting `CHECKMARX_BASE_URL` and `CHECKMARX_API_TOKEN` in the MCP server `env` block.
+2. If you want to keep secrets only in the workspace, set `CHECKMARX_DSCAN_ENV_FILE` to the absolute path of the workspace `.env` in the MCP server `env` block.
+3. Only rely on implicit `.env` discovery when the server is running from the same repo layout and you are comfortable with that coupling.
 
 ## Local validation
 

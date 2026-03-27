@@ -12,13 +12,28 @@ from ..domain.constants import SCAN_TYPE_ALIASES, TOKEN_ENDPOINT_SUFFIX
 from ..domain.errors import CheckmarxError
 
 
+def _configured_env_file() -> Path | None:
+    configured = os.getenv("CHECKMARX_DSCAN_ENV_FILE") or os.getenv("CHECKMARX_ENV_FILE")
+    if not configured:
+        return None
+    return Path(configured).expanduser()
+
+
 def _iter_env_search_paths(env_path: str) -> list[Path]:
     requested = Path(env_path).expanduser()
+    configured = _configured_env_file()
     if requested.is_absolute():
-        return [requested]
+        candidates = [requested]
+        if configured is not None and configured != requested:
+            candidates.insert(0, configured)
+        return candidates
 
     candidates: list[Path] = []
     seen: set[Path] = set()
+    if configured is not None:
+        resolved_configured = configured.resolve()
+        seen.add(resolved_configured)
+        candidates.append(resolved_configured)
     search_roots = [Path.cwd(), *Path.cwd().parents, *Path(__file__).resolve().parents]
     for root in search_roots:
         candidate = (root / requested).resolve()

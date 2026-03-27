@@ -197,9 +197,56 @@ class CheckmarxClient:
 		projects = pick(payload, "projects", "Projects", default=[])
 		return [item for item in projects if isinstance(item, dict)] if isinstance(projects, list) else []
 
+	def list_projects(
+		self,
+		*,
+		limit: int = 100,
+		offset: int = 0,
+		name: str = "",
+	) -> dict[str, Any]:
+		query = {
+			"limit": max(1, int(limit)),
+			"offset": max(0, int(offset)),
+		}
+		if name.strip():
+			query["name"] = name.strip()
+		url = with_query(join_url(self.base_url, "api/projects"), query)
+		return self._request_json("GET", url, auth=True, expected_status=(200,))
+
+	def get_all_projects(self, *, page_size: int = 100, max_projects: int = 1000) -> list[dict[str, Any]]:
+		projects: list[dict[str, Any]] = []
+		offset = 0
+		resolved_page_size = max(1, int(page_size))
+		resolved_max_projects = max(1, int(max_projects))
+		seen_ids: set[str] = set()
+
+		while len(projects) < resolved_max_projects:
+			payload = self.list_projects(limit=resolved_page_size, offset=offset)
+			batch = self._extract_projects(payload)
+			if not batch:
+				break
+
+			for project in batch:
+				project_id = pick_str(project, "id", "ID")
+				if project_id and project_id in seen_ids:
+					continue
+				if project_id:
+					seen_ids.add(project_id)
+				projects.append(project)
+				if len(projects) >= resolved_max_projects:
+					break
+
+			total_count = to_int(pick(payload, "totalCount", "TotalCount"), default=None)
+			offset += len(batch)
+			if len(batch) < resolved_page_size:
+				break
+			if total_count is not None and offset >= total_count:
+				break
+
+		return projects
+
 	def get_project_by_name(self, project_name: str) -> dict[str, Any] | None:
-		url = with_query(join_url(self.base_url, "api/projects"), {"name": project_name, "limit": 100})
-		payload = self._request_json("GET", url, auth=True, expected_status=(200,))
+		payload = self.list_projects(name=project_name, limit=100)
 		for project in self._extract_projects(payload):
 			if pick_str(project, "name", "Name") == project_name:
 				return project

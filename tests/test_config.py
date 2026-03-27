@@ -90,6 +90,16 @@ class ResolveConfigTests(unittest.TestCase):
                 finally:
                     os.chdir(original_cwd)
 
+    def test_load_env_file_uses_configured_env_file_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            env_path = root / "workspace.env"
+            env_path.write_text("CHECKMARX_API_TOKEN=from-configured-env\n", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"CHECKMARX_DSCAN_ENV_FILE": str(env_path)}, clear=True):
+                load_env_file(".env")
+                self.assertEqual(os.getenv("CHECKMARX_API_TOKEN"), "from-configured-env")
+
 
 if __name__ == "__main__":
     unittest.main()

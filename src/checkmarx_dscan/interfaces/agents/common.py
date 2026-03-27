@@ -12,6 +12,7 @@ from ...application.config.resolvers import (
 )
 from ...application.services.checkmarx_scan import CheckmarxScanService
 from ...application.services.jenkins_artifact import JenkinsArtifactService
+from ...application.services.project_catalog import CheckmarxProjectCatalogService
 from ...application.services.project_scan import ProjectScanService
 from ...domain.errors import CheckmarxError
 from ...infrastructure.serialization.json import dumps_json, write_output_json
@@ -19,12 +20,15 @@ from ...infrastructure.serialization.json import dumps_json, write_output_json
 
 CHECKMARX_SCAN_TOOL_NAME = "checkmarx_scan"
 CHECKMARX_SCAN_TOOL_DESCRIPTION = (
-	"Run Checkmarx in one of two modes through a single tool. When source is provided, create a new upload scan, wait "
-	"for it to finish, and return a structured JSON report. When source is omitted or scan_mode=latest_project, fetch the "
-	"latest existing Checkmarx scan for the project and optional branch directly from Checkmarx. Both modes return normalized "
-	"findings plus an agent_report section containing vulnerability_summary, engine_coverage, top_actionable_issues, "
+	"Run Checkmarx through a single tool in three modes. Use scan_mode=projects to enumerate accessible Checkmarx projects "
+	"and get best-match candidates for a user-supplied project query. By default, fetch the latest existing Checkmarx scan "
+	"for the project and optional branch directly from Checkmarx. Use scan_mode=upload only when the user explicitly wants "
+	"to upload local source and start a new scan. When source is omitted or scan_mode=latest_project, fetch the "
+	"latest existing Checkmarx scan for the project and optional branch directly from Checkmarx. Scan report modes return "
+	"normalized findings plus an agent_report section containing vulnerability_summary, engine_coverage, top_actionable_issues, "
 	"top_fix_targets, and categorized code/dependency/container/infrastructure issues. Use findings or "
-	"agent_report.vulnerabilities for long-form detail. Use include_raw=true only when the normalized and agent-friendly "
+	"agent_report.vulnerabilities for long-form detail. report_profile is accepted for client compatibility and current "
+	"responses remain compact by default. Use include_raw=true only when the normalized and agent-friendly "
 	"fields are insufficient and raw.final_scan/raw.results are needed."
 )
 
@@ -49,10 +53,12 @@ JENKINS_ARTIFACT_TOOL_DESCRIPTION = (
 
 def _resolve_checkmarx_scan_mode(scan_mode: str, source: str) -> str:
 	resolved_mode = (scan_mode or "auto").strip().lower().replace("-", "_")
-	if resolved_mode not in {"auto", "upload", "latest_project"}:
-		raise CheckmarxError("scan_mode must be one of: auto, upload, latest_project")
+	if resolved_mode in {"project_catalog", "enumerate_projects"}:
+		resolved_mode = "projects"
+	if resolved_mode not in {"auto", "upload", "latest_project", "projects"}:
+		raise CheckmarxError("scan_mode must be one of: auto, upload, latest_project, projects")
 	if resolved_mode == "auto":
-		return "upload" if (source or "").strip() else "latest_project"
+		return "latest_project"
 	return resolved_mode
 
 
@@ -68,7 +74,12 @@ def execute_checkmarx_scan_tool(**kwargs: Any) -> dict[str, Any]:
 		tenant=kwargs.get("tenant", ""),
 		timeout=kwargs.get("timeout"),
 	)
-	if resolved_mode == "upload":
+	if resolved_mode == "projects":
+		payload = CheckmarxProjectCatalogService(credentials).execute(
+			project_query=kwargs.get("project_query") or kwargs.get("project", ""),
+			include_raw=include_raw,
+		)
+	elif resolved_mode == "upload":
 		request = resolve_scan_request(
 			project_name=kwargs["project"],
 			source=source,
@@ -81,6 +92,7 @@ def execute_checkmarx_scan_tool(**kwargs: Any) -> dict[str, Any]:
 			keep_archive=kwargs.get("keep_archive", False),
 		)
 		report = CheckmarxScanService(credentials).execute(request)
+		payload = report.to_dict(include_raw=include_raw)
 	else:
 		request = resolve_project_scan_request(
 			project_name=kwargs["project"],
@@ -91,7 +103,7 @@ def execute_checkmarx_scan_tool(**kwargs: Any) -> dict[str, Any]:
 			scan_lookback=kwargs.get("scan_lookback"),
 		)
 		report = ProjectScanService(credentials).execute(request)
-	payload = report.to_dict(include_raw=include_raw)
+		payload = report.to_dict(include_raw=include_raw)
 	if kwargs.get("output_json"):
 		write_output_json(kwargs["output_json"], payload, default_file_name="checkmarx_scan_report.json")
 	return payload

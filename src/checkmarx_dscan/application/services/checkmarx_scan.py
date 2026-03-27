@@ -6,6 +6,7 @@ from typing import Callable
 from ...domain.errors import CheckmarxError
 from ...domain.models import ArchiveInfo, CheckmarxCredentials, ScanExecutionReport, ScanRequest
 from ...shared.utils import format_bytes, pick, pick_str, utc_now_iso
+from .project_catalog import resolve_project_match
 from ..reporting.report_builder import build_execution_report, extract_scan_status, format_status_details
 from ...infrastructure.clients.checkmarx import CheckmarxClient
 from ...infrastructure.packaging.archive import build_zip_archive
@@ -51,7 +52,13 @@ class CheckmarxScanService:
                 progress_callback(f"Prepared archive: {archive_info.path} ({archive_info.size_human})")
 
             self.client.authenticate()
-            project, was_created = self.client.ensure_project(request.project_name, request.branch)
+            available_projects = self.client.get_all_projects()
+            resolved_match = resolve_project_match(available_projects, request.project_name)
+            if resolved_match is not None:
+                project = resolved_match["project"]
+                was_created = False
+            else:
+                project, was_created = self.client.ensure_project(request.project_name, request.branch)
             project_id = pick_str(project, "id", "ID")
             if not project_id:
                 raise CheckmarxError("Checkmarx did not return a project ID")

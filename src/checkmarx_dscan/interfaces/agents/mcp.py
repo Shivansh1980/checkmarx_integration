@@ -17,14 +17,16 @@ from ...domain.errors import CheckmarxError, MCPServerDependencyError
 SERVER_NAME = "checkmarx-dscan"
 SERVER_INSTRUCTIONS = (
 	"Use these tools to retrieve Checkmarx One vulnerability data in two ways: "
-	"(1) checkmarx_scan for either creating a new upload scan from local source or, when source is omitted or "
-	"scan_mode=latest_project, fetching the latest existing scan for a Checkmarx project and optional branch, and "
+	"(1) checkmarx_scan for project discovery with scan_mode=projects, for fetching the latest existing scan for a Checkmarx project "
+	"and optional branch, or, only when the user explicitly asks for it, for creating a new upload scan from local source "
+	"and optional branch, and "
 	"(2) jenkins_artifact for Jenkins-archived Checkmarx reports with optional Checkmarx enrichment. "
 	"For agent-friendly consumption, start with agent_report.vulnerability_summary, agent_report.engine_coverage, "
 	"agent_report.top_actionable_issues, and agent_report.top_fix_targets. If more detail is required, read "
-	"agent_report.vulnerabilities or findings. If native Checkmarx payload detail is required, call the tool with "
-	"include_raw=true and inspect raw.final_scan and raw.results. output_json only writes a local copy; the primary "
-	"result for MCP clients is the structured tool response itself."
+	"agent_report.vulnerabilities or findings. In projects mode, use matches and project_resolution.best_match to choose "
+	"the correct project before requesting a report. If native Checkmarx payload detail is required, call the tool with "
+	"include_raw=true and inspect raw.final_scan, raw.results, or raw.projects. output_json only writes a local copy; "
+	"the primary result for MCP clients is the structured tool response itself."
 )
 
 
@@ -103,10 +105,12 @@ else:
 			structured_output=True,
 		)
 		def checkmarx_scan(
-			project: str,
+			project: str = "",
+			project_query: str = "",
 			source: str = "",
 			env_file: str = ".env",
 			scan_mode: str = "auto",
+			report_profile: str = "compact",
 			branch: str = "",
 			scan_types: str = "",
 			timeout: int | None = None,
@@ -126,9 +130,11 @@ else:
 			try:
 				return execute_checkmarx_scan_tool(
 					project=project,
+					project_query=project_query,
 					source=source,
 					env_file=env_file,
 					scan_mode=scan_mode,
+					report_profile=report_profile,
 					branch=branch,
 					scan_types=scan_types,
 					timeout=timeout,
@@ -150,6 +156,7 @@ else:
 					CHECKMARX_SCAN_TOOL_NAME,
 					exc,
 					project=project,
+					project_query=project_query,
 					scan_mode=scan_mode,
 					env_file=env_file,
 				)
@@ -164,6 +171,7 @@ else:
 			env_file: str = ".env",
 			build_number: int | None = None,
 			artifact_name: str = "",
+			report_profile: str = "compact",
 			timeout: int | None = None,
 			poll_interval: int | None = None,
 			poll_timeout: int | None = None,
@@ -185,6 +193,7 @@ else:
 					env_file=env_file,
 					build_number=build_number,
 					artifact_name=artifact_name,
+					report_profile=report_profile,
 					timeout=timeout,
 					poll_interval=poll_interval,
 					poll_timeout=poll_timeout,
