@@ -14,7 +14,9 @@ from checkmarx_dscan.interfaces.agents.common import (
 	execute_checkmarx_project_scan_tool,
 	execute_checkmarx_scan_tool,
 	execute_jenkins_artifact_tool,
+	execute_sonar_tool,
 )
+from checkmarx_dscan.interfaces.agents.crewai import run_sonar_tool
 from checkmarx_dscan.interfaces.agents.mcp import create_mcp_server
 
 
@@ -32,7 +34,7 @@ class AgentAdapterTests(unittest.TestCase):
 
 		self.assertEqual(payload["summary"]["total_findings"], 0)
 		service_cls.return_value.execute.assert_called_once()
-		mock_report.to_dict.assert_called_once_with(include_raw=False)
+		mock_report.to_dict.assert_called_once_with(include_raw=False, profile="compact")
 
 	def test_execute_checkmarx_scan_tool_auto_mode_prefers_latest_project_even_with_source(self) -> None:
 		mock_report = mock.Mock()
@@ -48,7 +50,7 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertEqual(payload["summary"]["total_findings"], 4)
 		resolve_request_mock.assert_called_once()
 		service_cls.return_value.execute.assert_called_once()
-		mock_report.to_dict.assert_called_once_with(include_raw=False)
+		mock_report.to_dict.assert_called_once_with(include_raw=False, profile="compact")
 
 	def test_execute_checkmarx_scan_tool_without_source_uses_latest_project_scan(self) -> None:
 		mock_report = mock.Mock()
@@ -64,7 +66,7 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertEqual(payload["summary"]["total_findings"], 4)
 		resolve_request_mock.assert_called_once()
 		service_cls.return_value.execute.assert_called_once()
-		mock_report.to_dict.assert_called_once_with(include_raw=False)
+		mock_report.to_dict.assert_called_once_with(include_raw=False, profile="compact")
 
 	def test_execute_checkmarx_scan_tool_projects_mode_returns_catalog(self) -> None:
 		catalog_payload = {
@@ -103,7 +105,7 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertEqual(payload["summary"]["total_findings"], 4)
 		resolve_request_mock.assert_called_once()
 		service_cls.return_value.execute.assert_called_once()
-		mock_report.to_dict.assert_called_once_with(include_raw=False)
+		mock_report.to_dict.assert_called_once_with(include_raw=False, profile="compact")
 
 	def test_execute_jenkins_artifact_tool_returns_report_dict(self) -> None:
 		mock_report = mock.Mock()
@@ -133,7 +135,7 @@ class AgentAdapterTests(unittest.TestCase):
 			timeout=None,
 		)
 		service_cls.return_value.execute.assert_called_once()
-		mock_report.to_dict.assert_called_once_with(include_raw=False)
+		mock_report.to_dict.assert_called_once_with(include_raw=False, profile="compact")
 
 	def test_create_mcp_server_registers_expected_tools(self) -> None:
 		server = create_mcp_server()
@@ -142,7 +144,34 @@ class AgentAdapterTests(unittest.TestCase):
 
 		self.assertIn("checkmarx_scan", tool_names)
 		self.assertIn("jenkins_artifact", tool_names)
-		self.assertEqual(tool_names, {"checkmarx_scan", "jenkins_artifact"})
+		self.assertIn("sonar", tool_names)
+		self.assertEqual(
+			tool_names,
+			{
+				"checkmarx_scan",
+				"jenkins_artifact",
+				"sonar",
+			},
+		)
+
+	def test_execute_sonar_tool_local_report_does_not_require_base_url(self) -> None:
+		with mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials", return_value=object()) as resolve_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.SonarCoverageService") as service_cls:
+			service_cls.return_value.local_coverage_report.return_value = {"ok": True, "report_type": "local_coverage_prediction"}
+			payload = execute_sonar_tool(operation="local_report", coverage_threshold=80.0)
+
+		self.assertTrue(payload["ok"])
+		self.assertEqual(payload["report_type"], "local_coverage_prediction")
+		resolve_credentials_mock.assert_called_once_with(base_url="", token="", timeout=None, require_base_url=False)
+		service_cls.return_value.local_coverage_report.assert_called_once()
+
+	def test_crewai_run_sonar_tool_forwards_to_json_runner(self) -> None:
+		with mock.patch("checkmarx_dscan.interfaces.agents.crewai.run_sonar_tool_json", return_value='{"ok": true}') as runner:
+			payload = run_sonar_tool(operation="projects", project_query="demo")
+
+		self.assertEqual(payload, '{"ok": true}')
+		runner.assert_called_once_with(operation="projects", project_query="demo")
 
 	def test_checkmarx_scan_tool_returns_structured_error_for_missing_credentials(self) -> None:
 		server = create_mcp_server()
@@ -179,6 +208,23 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertTrue(result["ok"])
 		execute_mock.assert_called_once()
 		self.assertEqual(execute_mock.call_args.kwargs["report_profile"], "compact")
+
+	def test_sonar_tool_returns_structured_error_for_missing_base_url(self) -> None:
+		server = create_mcp_server()
+		with mock.patch.dict("os.environ", {}, clear=True):
+			_, result = asyncio.run(server.call_tool(
+				"sonar",
+				{
+					"operation": "remote_report",
+					"env_file": "__missing__.env",
+					"project": "demo",
+				},
+			))
+
+		self.assertFalse(result["ok"])
+		self.assertEqual(result["tool"], "sonar")
+		self.assertEqual(result["error"]["code"], "missing_sonar_base_url")
+		self.assertEqual(result["error"]["category"], "configuration")
 
 
 if __name__ == "__main__":

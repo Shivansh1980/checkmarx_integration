@@ -9,8 +9,11 @@ from .common import (
 	CHECKMARX_SCAN_TOOL_NAME,
 	JENKINS_ARTIFACT_TOOL_DESCRIPTION,
 	JENKINS_ARTIFACT_TOOL_NAME,
+	SONAR_TOOL_DESCRIPTION,
+	SONAR_TOOL_NAME,
 	run_checkmarx_scan_tool_json,
 	run_jenkins_artifact_tool_json,
+	run_sonar_tool_json,
 )
 from ...domain.errors import CrewAIToolDependencyError
 
@@ -28,6 +31,10 @@ def run_checkmarx_project_scan_tool(**kwargs: Any) -> str:
 
 def run_jenkins_artifact_tool(**kwargs: Any) -> str:
 	return run_jenkins_artifact_tool_json(**kwargs)
+
+
+def run_sonar_tool(**kwargs: Any) -> str:
+	return run_sonar_tool_json(**kwargs)
 
 
 try:
@@ -52,6 +59,12 @@ except ImportError as exc:
 		def __init__(self, *args: Any, **kwargs: Any) -> None:
 			raise CrewAIToolDependencyError(
 				"Install the optional crewai dependencies with `pip install -e .[crewai]` to use JenkinsArtifactTool."
+			) from _IMPORT_ERROR
+
+	class SonarTool:  # type: ignore[no-redef]
+		def __init__(self, *args: Any, **kwargs: Any) -> None:
+			raise CrewAIToolDependencyError(
+				"Install the optional crewai dependencies with `pip install -e .[crewai]` to use SonarTool."
 			) from _IMPORT_ERROR
 
 else:
@@ -137,3 +150,40 @@ else:
 
 		def _run(self, **kwargs: Any) -> str:
 			return run_jenkins_artifact_tool(**kwargs)
+
+	class SonarToolInput(BaseModel):
+		operation: str = Field(default="remote_report", description="Sonar operation to run. Allowed values: access_probe, projects, remote_report, file_detail, local_report.")
+		project: str = Field(default="", description="Sonar project key for remote_report, file_detail, or local_report comparison.")
+		base_url: str = Field(default="", description="Optional override for SONAR_BASE_URL.")
+		token: str = Field(default="", description="Optional override for SONAR_TOKEN.")
+		env_file: str = Field(default=".env", description="Path to a .env file containing Sonar settings.")
+		timeout: int | None = Field(default=None, description="Per-request HTTP timeout in seconds.")
+		branch: str = Field(default="", description="Optional branch name for remote Sonar lookups.")
+		pull_request: str = Field(default="", description="Optional pull request key for remote Sonar lookups.")
+		project_query: str = Field(default="", description="Project search text used by access_probe or projects.")
+		include_projects: bool = Field(default=False, description="For access_probe, include a sample of discovered projects.")
+		page: int = Field(default=1, description="Page number for projects listing.")
+		page_size: int = Field(default=100, description="Page size for projects listing.")
+		include_branches_for: str = Field(default="", description="Optional project key whose branches should be included in projects mode.")
+		file_limit: int = Field(default=25, description="Maximum number of files to return in remote_report or local_report.")
+		coverage_threshold: float = Field(default=80.0, description="Coverage threshold used for prioritization and local pass/fail prediction.")
+		file: str = Field(default="", description="Project-relative file path for file_detail.")
+		file_key: str = Field(default="", description="Explicit Sonar component key for file_detail.")
+		include_source: bool = Field(default=True, description="For file_detail, include source excerpt when accessible.")
+		include_line_details: bool = Field(default=True, description="For file_detail, attempt to include covered and uncovered line numbers.")
+		use_internal_fallbacks: bool = Field(default=False, description="For file_detail, use internal Sonar component endpoints to estimate line-level coverage.")
+		local_working_directory: str = Field(default="", description="For local_report, working directory to run coverage from.")
+		local_source_paths: str = Field(default="", description="For local_report, comma-separated source paths to pass to coverage.py.")
+		local_pytest_args: str = Field(default="", description="For local_report, additional pytest arguments.")
+		local_timeout: int | None = Field(default=None, description="For local_report, local command timeout in seconds.")
+		compare_with_remote: bool = Field(default=False, description="For local_report, compare local results with remote Sonar project coverage when available.")
+		include_raw: bool = Field(default=False, description="Include raw Sonar or local coverage payloads in the JSON response.")
+		output_json: str | None = Field(default=None, description="Optional path where the Sonar report should be written.")
+
+	class SonarTool(BaseTool):
+		name: str = SONAR_TOOL_NAME
+		description: str = SONAR_TOOL_DESCRIPTION
+		args_schema: type[BaseModel] = SonarToolInput
+
+		def _run(self, **kwargs: Any) -> str:
+			return run_sonar_tool(**kwargs)
