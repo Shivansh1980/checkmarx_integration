@@ -4,6 +4,7 @@ from typing import Any
 
 from ...application.config.resolvers import (
 	load_env_file,
+	resolve_data_source,
 	resolve_credentials,
 	resolve_jenkins_artifact_request,
 	resolve_jenkins_credentials,
@@ -13,6 +14,7 @@ from ...application.config.resolvers import (
 )
 from ...application.services.checkmarx_scan import CheckmarxScanService
 from ...application.services.jenkins_artifact import JenkinsArtifactService
+from ...application.services.mock_payloads import load_mock_checkmarx_payload, load_mock_jenkins_payload, load_mock_sonar_payload
 from ...application.services.project_catalog import CheckmarxProjectCatalogService
 from ...application.services.project_scan import ProjectScanService
 from ...application.services.sonar import SonarCoverageService
@@ -83,10 +85,24 @@ def _resolve_checkmarx_scan_mode(scan_mode: str, source: str) -> str:
 
 def execute_checkmarx_scan_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
+	data_source = resolve_data_source()
 	include_raw = kwargs.get("include_raw", True)
 	report_profile = normalize_report_profile(kwargs.get("report_profile", REPORT_PROFILE_COMPACT))
 	source = kwargs.get("source", "")
 	resolved_mode = _resolve_checkmarx_scan_mode(kwargs.get("scan_mode", "auto"), source)
+	if data_source == "mock":
+		payload = load_mock_checkmarx_payload(
+			scan_mode=resolved_mode,
+			include_raw=include_raw,
+			profile=report_profile,
+			project=kwargs.get("project", ""),
+			project_query=kwargs.get("project_query", ""),
+			branch=kwargs.get("branch", ""),
+			source=source,
+		)
+		if kwargs.get("output_json"):
+			write_output_json(kwargs["output_json"], payload, default_file_name="checkmarx_scan_report.json")
+		return payload
 	credentials = resolve_credentials(
 		base_url=kwargs.get("base_url", ""),
 		api_token=kwargs.get("api_token", ""),
@@ -146,8 +162,20 @@ def run_checkmarx_project_scan_tool_json(**kwargs: Any) -> str:
 
 def execute_jenkins_artifact_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
+	data_source = resolve_data_source()
 	include_raw = kwargs.get("include_raw", True)
 	report_profile = normalize_report_profile(kwargs.get("report_profile", REPORT_PROFILE_COMPACT))
+	if data_source == "mock":
+		payload = load_mock_jenkins_payload(
+			include_raw=include_raw,
+			profile=report_profile,
+			job_url=kwargs.get("job_url", ""),
+			build_number=kwargs.get("build_number"),
+			artifact_name=kwargs.get("artifact_name", ""),
+		)
+		if kwargs.get("output_json"):
+			write_output_json(kwargs["output_json"], payload, default_file_name="jenkins_artifact_report.json")
+		return payload
 	credentials = resolve_jenkins_credentials(
 		base_url=kwargs.get("base_url", ""),
 		username=kwargs.get("username", ""),
@@ -190,6 +218,29 @@ def run_jenkins_artifact_tool_json(**kwargs: Any) -> str:
 def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
 	operation = _resolve_sonar_operation(kwargs.get("operation", "remote_report"))
+	data_source = resolve_data_source()
+	if data_source == "mock":
+		payload = load_mock_sonar_payload(
+			operation=operation,
+			include_raw=kwargs.get("include_raw", False),
+			project=kwargs.get("project", ""),
+			branch=kwargs.get("branch", ""),
+			file_path=kwargs.get("file", ""),
+			file_key=kwargs.get("file_key", ""),
+			coverage_threshold=kwargs.get("coverage_threshold", 80.0),
+			local_working_directory=kwargs.get("local_working_directory", ""),
+			compare_with_remote=kwargs.get("compare_with_remote", False),
+		)
+		if kwargs.get("output_json"):
+			default_file_name = {
+				"access_probe": "sonar_access_probe_report.json",
+				"projects": "sonar_projects_report.json",
+				"remote_report": "sonar_coverage_report.json",
+				"file_detail": "sonar_file_coverage_detail.json",
+				"local_report": "sonar_local_coverage_report.json",
+			}[operation]
+			write_output_json(kwargs["output_json"], payload, default_file_name=default_file_name)
+		return payload
 	credentials = resolve_sonar_credentials(
 		base_url=kwargs.get("base_url", ""),
 		token=kwargs.get("token", ""),

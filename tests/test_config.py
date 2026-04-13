@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from checkmarx_dscan.application.config.resolvers import (
     load_env_file,
     resolve_credentials,
+    resolve_data_source,
     resolve_jenkins_artifact_request,
     resolve_jenkins_credentials,
     resolve_project_scan_request,
@@ -72,6 +73,21 @@ class ResolveConfigTests(unittest.TestCase):
         self.assertEqual(request.project_name, "demo-project")
         self.assertEqual(request.branch, "")
         self.assertTrue(request.prefer_terminal_scan)
+
+    def test_resolve_data_source_uses_environment_only(self) -> None:
+        with mock.patch.dict(os.environ, {"CHECKMARX_DSCAN_DATA_SOURCE": "live"}, clear=True):
+            resolved = resolve_data_source()
+        self.assertEqual(resolved, "live")
+
+    def test_resolve_data_source_defaults_to_mock(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            resolved = resolve_data_source()
+        self.assertEqual(resolved, "mock")
+
+    def test_resolve_data_source_rejects_invalid_environment_value(self) -> None:
+        with mock.patch.dict(os.environ, {"CHECKMARX_DSCAN_DATA_SOURCE": "demo"}, clear=True):
+            with self.assertRaises(CheckmarxError):
+                resolve_data_source()
 
     def test_load_env_file_searches_parent_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

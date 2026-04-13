@@ -10,6 +10,8 @@
 
 Both flows return JSON shaped for downstream automation and agent processing.
 
+By default, the tool-facing adapters in this workspace now use bundled mock reports so demos can run without live Checkmarx, Jenkins, or Sonar access. Switch back to live systems by setting `CHECKMARX_DSCAN_DATA_SOURCE=live` in `.env` or the process environment.
+
 ## MCP client guidance
 
 If you attach this project as an MCP server to an agent client such as Cody, the client should treat the tool response itself as the primary output. `output_json` only writes a local copy for audit or later inspection; agents do not need to read files from disk unless they explicitly want persisted artifacts.
@@ -17,11 +19,11 @@ If you attach this project as an MCP server to an agent client such as Cody, the
 Recommended tool selection order:
 
 - `checkmarx_scan`
-                        Use this for all direct Checkmarx workflows. By default it resolves the requested project against accessible Checkmarx projects and fetches the latest existing scan for that project and optional branch. Set `scan_mode=projects` when you need to enumerate accessible projects and find the best match for a user-supplied project name. Use `scan_mode=upload` only when you explicitly want to upload local source to Checkmarx and start a new scan.
+                        Use this for all direct Checkmarx workflows. By default it resolves the requested project against accessible Checkmarx projects and fetches the latest existing scan for that project and optional branch. Set `scan_mode=projects` when you need to enumerate accessible projects and find the best match for a user-supplied project name. Use `scan_mode=upload` only when you explicitly want to upload local source to Checkmarx and start a new scan. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want real API traffic instead of the bundled mock report.
 - `jenkins_artifact`
-        Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters.
+        Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to call Jenkins and optional Checkmarx enrichment live.
 - `sonar`
-        Use this single tool for all Sonar and local coverage flows. Set `operation=access_probe` to validate Sonar access, `operation=projects` to discover project keys, `operation=remote_report` for the latest Sonar coverage report, `operation=file_detail` for one file, and `operation=local_report` to run local pytest coverage and predict whether the current branch is likely to clear the requested threshold before push.
+        Use this single tool for all Sonar and local coverage flows. Set `operation=access_probe` to validate Sonar access, `operation=projects` to discover project keys, `operation=remote_report` for the latest Sonar coverage report, `operation=file_detail` for one file, and `operation=local_report` to run local pytest coverage and predict whether the current branch is likely to clear the requested threshold before push. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to query a real Sonar server.
 
 Recommended response fields for agents:
 
@@ -206,6 +208,11 @@ JENKINS_JOB_URL=http://jenkins.example.com/job/folder/job/project/job/release_1/
 
 SONAR_BASE_URL=http://sonar.multiplan.com
 SONAR_TOKEN=your_sonar_user_token
+
+# Optional: switch the tool adapters between bundled demo data and live APIs.
+# This is the single source of truth for mode selection.
+# Default is mock in this workspace.
+CHECKMARX_DSCAN_DATA_SOURCE=mock
 ```
 
 ## How to generate a Jenkins API token

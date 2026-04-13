@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_project_scan_request
+from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_data_source, resolve_project_scan_request
 from ...application.reporting.report_builder import render_project_scan_console_report
 from ...application.services.project_scan import ProjectScanService
 from ...domain.constants import DEFAULT_RESULTS_LIMIT
 from ...domain.errors import CheckmarxError
+from ...interfaces.agents.common import execute_checkmarx_project_scan_tool
+from ...infrastructure.serialization.json import dumps_json
 from ...infrastructure.serialization.json import write_output_json
 from ...shared.utils import first_non_empty
 
@@ -39,6 +41,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(list(sys.argv[1:] if argv is None else argv))
     load_env_file(args.env_file)
     project_name = first_non_empty(args.project, args.project_name)
+    data_source = resolve_data_source()
+    if data_source == "mock":
+        payload = execute_checkmarx_project_scan_tool(
+            project=project_name,
+            env_file=args.env_file,
+            branch=args.branch or "",
+            timeout=args.timeout,
+            results_page_size=args.results_page_size,
+            include_raw=not args.omit_raw,
+            output_json=args.output_json,
+            base_url=args.base_url or "",
+            api_token=args.api_token or "",
+            auth_url=args.auth_url or "",
+            tenant=args.tenant or "",
+            prefer_terminal_scan=not args.prefer_running_scan,
+            scan_lookback=args.scan_lookback,
+        )
+        print(dumps_json(payload))
+        return 0
     credentials = resolve_credentials(
         base_url=args.base_url or "",
         api_token=args.api_token or "",

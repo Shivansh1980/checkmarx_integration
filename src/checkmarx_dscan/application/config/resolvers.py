@@ -17,6 +17,17 @@ from ...domain.models import CheckmarxCredentials, JenkinsArtifactRequest, Jenki
 from ...shared.utils import first_non_empty, join_url, load_env_file, normalize_scan_types, to_int
 
 
+def resolve_data_source() -> str:
+    resolved = first_non_empty(
+        os.getenv("CHECKMARX_DSCAN_DATA_SOURCE"),
+        os.getenv("CX_DSCAN_DATA_SOURCE"),
+        "mock",
+    ).strip().lower().replace("-", "_")
+    if resolved not in {"mock", "live"}:
+        raise CheckmarxError("data_source must be one of: mock, live")
+    return resolved
+
+
 def resolve_credentials(
     *,
     base_url: str = "",
@@ -238,6 +249,7 @@ def resolve_jenkins_artifact_request(
 
 __all__ = [
     "load_env_file",
+    "resolve_data_source",
     "resolve_credentials",
     "resolve_jenkins_artifact_request",
     "resolve_jenkins_credentials",

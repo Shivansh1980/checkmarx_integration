@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_jenkins_artifact_request, resolve_jenkins_credentials
+from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_data_source, resolve_jenkins_artifact_request, resolve_jenkins_credentials
 from ...application.services.jenkins_artifact import JenkinsArtifactService, render_jenkins_artifact_console_report
 from ...domain.errors import CheckmarxError, JenkinsError
+from ...interfaces.agents.common import execute_jenkins_artifact_tool
+from ...infrastructure.serialization.json import dumps_json
 from ...infrastructure.serialization.json import write_output_json
 from ...shared.utils import first_non_empty
 
@@ -41,6 +43,30 @@ def main(argv: list[str] | None = None) -> int:
 	args = parse_args(list(sys.argv[1:] if argv is None else argv))
 	load_env_file(args.env_file)
 	job_url = first_non_empty(args.job_url, args.job_url_positional)
+	data_source = resolve_data_source()
+	if data_source == "mock":
+		payload = execute_jenkins_artifact_tool(
+			job_url=job_url,
+			env_file=args.env_file,
+			build_number=args.build_number,
+			artifact_name=args.artifact_name or "",
+			timeout=args.timeout,
+			poll_interval=args.poll_interval,
+			poll_timeout=args.poll_timeout,
+			fallback_build_lookback=args.fallback_build_lookback,
+			include_raw=not args.omit_raw,
+			output_json=args.output_json,
+			base_url=args.base_url or "",
+			username=args.username or "",
+			api_token=args.api_token or "",
+			checkmarx_base_url=args.checkmarx_base_url or "",
+			checkmarx_api_token=args.checkmarx_api_token or "",
+			checkmarx_auth_url=args.checkmarx_auth_url or "",
+			checkmarx_tenant=args.checkmarx_tenant or "",
+			prefer_running_build=not args.latest_completed_only,
+		)
+		print(dumps_json(payload))
+		return 0
 	credentials = resolve_jenkins_credentials(
 		base_url=args.base_url or "",
 		username=args.username or "",
