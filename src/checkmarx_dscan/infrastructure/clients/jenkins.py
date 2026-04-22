@@ -119,6 +119,14 @@ class JenkinsClient:
 		raw_body = self._request("GET", self._api_url(job_url, tree=tree), expected_status=(200,))
 		return self._decode_json(raw_body, job_url)
 
+	def list_jobs(self, resource_url: str) -> list[dict[str, Any]]:
+		raw_body = self._request("GET", self._api_url(resource_url, tree="jobs[name,url]"), expected_status=(200,))
+		payload = self._decode_json(raw_body, resource_url)
+		jobs = payload.get("jobs")
+		if not isinstance(jobs, list):
+			return []
+		return [job for job in jobs if isinstance(job, dict)]
+
 	def get_build_reference(self, job_url: str, reference: str) -> dict[str, Any] | None:
 		build_url = join_url(job_url.rstrip("/"), reference)
 		tree = "number,url,result,building,displayName,fullDisplayName,description,timestamp,duration,artifacts[fileName,relativePath,displayPath]"

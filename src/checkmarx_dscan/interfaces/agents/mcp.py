@@ -198,6 +198,7 @@ else:
 		def jenkins_artifact(
 			job_url: str,
 			env_file: str = ".env",
+			pr_number: int | None = None,
 			build_number: int | None = None,
 			artifact_name: str = "",
 			report_profile: str = "compact",
@@ -220,6 +221,7 @@ else:
 				return execute_jenkins_artifact_tool(
 					job_url=job_url,
 					env_file=env_file,
+					pr_number=pr_number,
 					build_number=build_number,
 					artifact_name=artifact_name,
 					report_profile=report_profile,

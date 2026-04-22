@@ -208,6 +208,7 @@ def _resolve_absolute_jenkins_job_url(job_url: str, credentials: JenkinsCredenti
 def resolve_jenkins_artifact_request(
     *,
     job_url: str = "",
+    pr_number: int | str | None = None,
     build_number: int | str | None = None,
     artifact_name: str = "",
     poll_interval: int | None = None,
@@ -234,9 +235,11 @@ def resolve_jenkins_artifact_request(
         else to_int(os.getenv("JENKINS_FALLBACK_BUILDS"), default=DEFAULT_JENKINS_FALLBACK_BUILDS)
     )
     resolved_build_number = to_int(build_number, default=None)
+    resolved_pr_number = to_int(pr_number, default=to_int(os.getenv("JENKINS_PR_NUMBER"), default=None))
 
     return JenkinsArtifactRequest(
         job_url=_resolve_absolute_jenkins_job_url(resolved_job_url, credentials),
+        pr_number=resolved_pr_number,
         build_number=resolved_build_number,
         artifact_name=resolved_artifact_name,
         poll_interval=max(1, int(resolved_poll_interval or DEFAULT_POLL_INTERVAL)),

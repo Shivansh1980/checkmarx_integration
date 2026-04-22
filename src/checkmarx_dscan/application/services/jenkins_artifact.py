@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -21,6 +22,43 @@ from ...infrastructure.clients.jenkins import JenkinsClient
 
 
 ProgressCallback = Callable[[str], None]
+_PR_JOB_NAME_PATTERN = re.compile(r"^PR-(\d+)$", re.IGNORECASE)
+
+
+def _extract_pr_number_from_job_name(name: str) -> int | None:
+	match = _PR_JOB_NAME_PATTERN.match((name or "").strip())
+	if match is None:
+		return None
+	return to_int(match.group(1), default=None)
+
+
+def _extract_pr_number_from_job_url(job_url: str) -> int | None:
+	cleaned = (job_url or "").strip().rstrip("/")
+	if not cleaned:
+		return None
+	return _extract_pr_number_from_job_name(cleaned.split("/")[-1])
+
+
+def _build_pr_job_url(job_url: str, pr_number: int) -> str:
+	cleaned = (job_url or "").strip().rstrip("/")
+	match = re.search(r"(?P<prefix>.*/job/PR-)(?P<number>\d+)/?$", cleaned, re.IGNORECASE)
+	if match is not None:
+		return f"{match.group('prefix')}{int(pr_number)}"
+	return f"{cleaned}/job/PR-{int(pr_number)}"
+
+
+def _select_latest_pr_job(jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
+	best_job: dict[str, Any] | None = None
+	best_pr_number = -1
+	for job in jobs:
+		pr_number = _extract_pr_number_from_job_name(pick_str(job, "name") or "")
+		if pr_number is None:
+			pr_number = _extract_pr_number_from_job_url(pick_str(job, "url") or "")
+		if pr_number is None or pr_number <= best_pr_number:
+			continue
+		best_pr_number = pr_number
+		best_job = job
+	return best_job
 
 
 def select_build_reference(
@@ -267,6 +305,60 @@ class JenkinsArtifactService:
 	def _build_job_info(self, request: JenkinsArtifactRequest) -> dict[str, Any]:
 		return {"url": request.job_url}
 
+	def _resolve_target_job(self, request: JenkinsArtifactRequest) -> JenkinsArtifactRequest:
+		job_url = request.job_url.rstrip("/")
+		if request.pr_number is not None:
+			return JenkinsArtifactRequest(
+				job_url=_build_pr_job_url(job_url, request.pr_number),
+				pr_number=request.pr_number,
+				build_number=request.build_number,
+				artifact_name=request.artifact_name,
+				poll_interval=request.poll_interval,
+				poll_timeout=request.poll_timeout,
+				include_raw=request.include_raw,
+				prefer_running_build=request.prefer_running_build,
+				fallback_build_lookback=request.fallback_build_lookback,
+			)
+
+		explicit_pr_number = _extract_pr_number_from_job_url(job_url)
+		if explicit_pr_number is not None:
+			return JenkinsArtifactRequest(
+				job_url=job_url,
+				pr_number=explicit_pr_number,
+				build_number=request.build_number,
+				artifact_name=request.artifact_name,
+				poll_interval=request.poll_interval,
+				poll_timeout=request.poll_timeout,
+				include_raw=request.include_raw,
+				prefer_running_build=request.prefer_running_build,
+				fallback_build_lookback=request.fallback_build_lookback,
+			)
+
+		if "/view/change-requests" not in job_url.lower():
+			return request
+
+		jobs = self.client.list_jobs(job_url)
+		latest_pr_job = _select_latest_pr_job(jobs)
+		if latest_pr_job is None:
+			raise JenkinsError(f"No PR jobs were found under Jenkins path {request.job_url}")
+		resolved_job_url = pick_str(latest_pr_job, "url")
+		if not resolved_job_url:
+			raise JenkinsError(f"Latest PR job under {request.job_url} did not include a URL")
+		resolved_pr_number = _extract_pr_number_from_job_name(pick_str(latest_pr_job, "name") or "")
+		if resolved_pr_number is None:
+			resolved_pr_number = _extract_pr_number_from_job_url(resolved_job_url)
+		return JenkinsArtifactRequest(
+			job_url=resolved_job_url.rstrip("/"),
+			pr_number=resolved_pr_number,
+			build_number=request.build_number,
+			artifact_name=request.artifact_name,
+			poll_interval=request.poll_interval,
+			poll_timeout=request.poll_timeout,
+			include_raw=request.include_raw,
+			prefer_running_build=request.prefer_running_build,
+			fallback_build_lookback=request.fallback_build_lookback,
+		)
+
 	def _find_recent_artifact_build(
 		self,
 		request: JenkinsArtifactRequest,
@@ -323,9 +415,12 @@ class JenkinsArtifactService:
 		*,
 		progress_callback: ProgressCallback | None = None,
 	) -> JenkinsArtifactExecutionReport:
+		request = self._resolve_target_job(request)
 		deadline = time.time() + request.poll_timeout if request.poll_timeout > 0 else None
 		last_status_message = ""
 		job_payload: dict[str, Any] = self._build_job_info(request)
+		if progress_callback is not None and request.pr_number is not None:
+			progress_callback(f"Using Jenkins PR-{request.pr_number} job at {request.job_url}.")
 
 		while True:
 			selected_from = "explicit"

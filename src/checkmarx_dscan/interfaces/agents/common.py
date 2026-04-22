@@ -170,6 +170,7 @@ def execute_jenkins_artifact_tool(**kwargs: Any) -> dict[str, Any]:
 			include_raw=include_raw,
 			profile=report_profile,
 			job_url=kwargs.get("job_url", ""),
+			pr_number=kwargs.get("pr_number"),
 			build_number=kwargs.get("build_number"),
 			artifact_name=kwargs.get("artifact_name", ""),
 		)
@@ -195,6 +196,7 @@ def execute_jenkins_artifact_tool(**kwargs: Any) -> dict[str, Any]:
 		checkmarx_credentials = None
 	request = resolve_jenkins_artifact_request(
 		job_url=kwargs["job_url"],
+		pr_number=kwargs.get("pr_number"),
 		build_number=kwargs.get("build_number"),
 		artifact_name=kwargs.get("artifact_name", ""),
 		poll_interval=kwargs.get("poll_interval"),

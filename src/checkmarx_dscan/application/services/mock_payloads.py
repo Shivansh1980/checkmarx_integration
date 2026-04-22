@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 from ...domain.models import REPORT_PROFILE_FULL, normalize_report_profile, serialize_agent_report
@@ -178,6 +179,22 @@ _CHECKMARX_PROJECTS = [
         "tags": ["demo"],
     },
 ]
+
+
+def _build_mock_pr_job_url(job_url: str, pr_number: int | None) -> str:
+    cleaned = (job_url or "").strip().rstrip("/")
+    if not cleaned:
+        cleaned = "http://jenkins.example.test/job/demo/view/change-requests"
+    if pr_number is not None:
+        match = re.search(r"(?P<prefix>.*/job/PR-)(?P<number>\d+)/?$", cleaned, re.IGNORECASE)
+        if match is not None:
+            return f"{match.group('prefix')}{int(pr_number)}"
+        return f"{cleaned}/job/PR-{int(pr_number)}"
+    if re.search(r"/job/PR-\d+/?$", cleaned, re.IGNORECASE):
+        return cleaned
+    if "/view/change-requests" in cleaned.lower():
+        return f"{cleaned}/job/PR-112"
+    return cleaned
 
 
 _JENKINS_FIXTURE = {
@@ -655,24 +672,34 @@ def load_mock_checkmarx_payload(*, scan_mode: str, include_raw: bool, profile: s
     return _apply_report_options(payload, include_raw=include_raw, profile=profile)
 
 
-def load_mock_jenkins_payload(*, include_raw: bool, profile: str | None = None, job_url: str = "", build_number: int | None = None, artifact_name: str = "") -> dict[str, Any]:
+def load_mock_jenkins_payload(*, include_raw: bool, profile: str | None = None, job_url: str = "", build_number: int | None = None, artifact_name: str = "", pr_number: int | None = None) -> dict[str, Any]:
     payload = deepcopy(_JENKINS_FIXTURE)
     payload["generated_at"] = utc_now_iso()
     request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
-    if job_url.strip():
-        request["job_url"] = job_url.strip()
+    resolved_job_url = _build_mock_pr_job_url(job_url, pr_number)
+    if resolved_job_url:
+        request["job_url"] = resolved_job_url
         if isinstance(payload.get("job"), dict):
-            payload["job"]["url"] = job_url.strip()
+            payload["job"]["url"] = resolved_job_url
+            payload["job"]["name"] = resolved_job_url.rstrip("/").split("/")[-1]
+        if isinstance(payload.get("raw"), dict) and isinstance(payload["raw"].get("job"), dict):
+            payload["raw"]["job"]["url"] = resolved_job_url
+            payload["raw"]["job"]["name"] = resolved_job_url.rstrip("/").split("/")[-1]
     if build_number is not None:
         request["build_number"] = int(build_number)
         if isinstance(payload.get("build"), dict):
             payload["build"]["number"] = int(build_number)
+            payload["build"]["url"] = f"{request.get('job_url', payload['build']['url']).rstrip('/')}/{int(build_number)}/"
+        if isinstance(payload.get("raw"), dict) and isinstance(payload["raw"].get("build"), dict):
+            payload["raw"]["build"]["number"] = int(build_number)
     if artifact_name.strip():
         request["artifact_name"] = artifact_name.strip()
         if isinstance(payload.get("artifact"), dict):
             payload["artifact"]["file_name"] = artifact_name.strip()
         if isinstance(payload.get("summary"), dict):
             payload["summary"]["artifact_name"] = artifact_name.strip()
+    if pr_number is not None:
+        request["pr_number"] = int(pr_number)
     return _apply_report_options(payload, include_raw=include_raw, profile=profile)
 
 

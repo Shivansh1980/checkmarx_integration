@@ -19,6 +19,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser.add_argument("job_url_positional", nargs="?", help="Full Jenkins job URL")
 	parser.add_argument("--job-url", help="Full Jenkins job URL override")
 	parser.add_argument("--env-file", default=".env", help="Path to the .env file to load before reading settings")
+	parser.add_argument("--pr-number", type=int, help="PR number to resolve under a Jenkins change-requests view. If omitted, the latest PR job is used.")
 	parser.add_argument("--build-number", type=int, help="Specific Jenkins build number to inspect")
 	parser.add_argument("--artifact-name", help="Exact archived file name to retrieve")
 	parser.add_argument("--timeout", type=int, help="Per-request timeout in seconds")
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 		payload = execute_jenkins_artifact_tool(
 			job_url=job_url,
 			env_file=args.env_file,
+			pr_number=args.pr_number,
 			build_number=args.build_number,
 			artifact_name=args.artifact_name or "",
 			timeout=args.timeout,
@@ -86,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 		checkmarx_credentials = None
 	request = resolve_jenkins_artifact_request(
 		job_url=job_url,
+		pr_number=args.pr_number,
 		build_number=args.build_number,
 		artifact_name=args.artifact_name or "",
 		poll_interval=args.poll_interval,

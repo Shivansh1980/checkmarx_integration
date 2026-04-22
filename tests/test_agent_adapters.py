@@ -219,6 +219,17 @@ class AgentAdapterTests(unittest.TestCase):
 		resolve_checkmarx_credentials_mock.assert_not_called()
 		service_cls.assert_not_called()
 
+	def test_execute_jenkins_artifact_tool_mock_mode_resolves_pr_job(self) -> None:
+		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True):
+			payload = execute_jenkins_artifact_tool(
+				job_url="http://jenkins/view/change-requests",
+				pr_number=112,
+				include_raw=False,
+			)
+
+		self.assertEqual(payload["request"]["pr_number"], 112)
+		self.assertEqual(payload["job"]["url"], "http://jenkins/view/change-requests/job/PR-112")
+
 	def test_crewai_run_sonar_tool_forwards_to_json_runner(self) -> None:
 		with mock.patch("checkmarx_dscan.interfaces.agents.crewai.run_sonar_tool_json", return_value='{"ok": true}') as runner:
 			payload = run_sonar_tool(operation="projects", project_query="demo")

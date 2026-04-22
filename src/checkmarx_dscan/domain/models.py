@@ -170,6 +170,7 @@ class ProjectScanRequest:
 @dataclass(slots=True)
 class JenkinsArtifactRequest:
 	job_url: str
+	pr_number: int | None = None
 	build_number: int | None = None
 	artifact_name: str = "checkmarx-ast-results.json"
 	poll_interval: int = DEFAULT_POLL_INTERVAL
@@ -181,6 +182,7 @@ class JenkinsArtifactRequest:
 	def to_dict(self) -> dict[str, Any]:
 		return {
 			"job_url": self.job_url,
+			"pr_number": self.pr_number,
 			"build_number": self.build_number,
 			"artifact_name": self.artifact_name,
 			"poll_interval": self.poll_interval,

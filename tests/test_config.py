@@ -67,6 +67,19 @@ class ResolveConfigTests(unittest.TestCase):
             request = resolve_jenkins_artifact_request()
         self.assertEqual(request.fallback_build_lookback, 7)
 
+    def test_resolve_jenkins_artifact_request_reads_pr_number(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "JENKINS_BASE_URL": "http://jenkins.example",
+                "JENKINS_JOB_URL": "view/change-requests",
+                "JENKINS_PR_NUMBER": "112",
+            },
+            clear=True,
+        ):
+            request = resolve_jenkins_artifact_request()
+        self.assertEqual(request.pr_number, 112)
+
     def test_resolve_project_scan_request_uses_defaults(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             request = resolve_project_scan_request(project_name="demo-project")

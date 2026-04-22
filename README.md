@@ -21,7 +21,7 @@ Recommended tool selection order:
 - `checkmarx_scan`
                         Use this for all direct Checkmarx workflows. By default it resolves the requested project against accessible Checkmarx projects and fetches the latest existing scan for that project and optional branch. Set `scan_mode=projects` when you need to enumerate accessible projects and find the best match for a user-supplied project name. Use `scan_mode=upload` only when you explicitly want to upload local source to Checkmarx and start a new scan. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want real API traffic instead of the bundled mock report.
 - `jenkins_artifact`
-        Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to call Jenkins and optional Checkmarx enrichment live.
+                Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters. You can point `job_url` at a direct Jenkins job or at a PR change-requests view; when used with a change-requests view, pass `pr_number` to target one PR or omit it to use the latest available PR job. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to call Jenkins and optional Checkmarx enrichment live.
 - `sonar`
         Use this single tool for all Sonar and local coverage flows. Set `operation=access_probe` to validate Sonar access, `operation=projects` to discover project keys, `operation=remote_report` for the latest Sonar coverage report, `operation=file_detail` for one file, and `operation=local_report` to run local pytest coverage and predict whether the current branch is likely to clear the requested threshold before push. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to query a real Sonar server.
 
@@ -98,6 +98,38 @@ For Jenkins artifact retrieval, the package returns a bundle with:
 - Network access to Checkmarx One for direct scans.
 - Network access to Jenkins for archived report retrieval.
 - Valid credentials for whichever flow you want to use.
+
+## Fresh machine setup
+
+Use this sequence on a new machine when you want the MCP server and the validation suite to work immediately.
+
+Windows PowerShell:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[mcp,dev]"
+Copy-Item .env.example .env
+python -m unittest tests.test_agent_adapters tests.test_config tests.test_project_catalog_service tests.test_project_scan_service tests.test_checkmarx_scan_service tests.test_jenkins_service tests.test_sonar_service
+checkmarx-mcp-server
+```
+
+macOS or Linux:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[mcp,dev]'
+cp .env.example .env
+python -m unittest tests.test_agent_adapters tests.test_config tests.test_project_catalog_service tests.test_project_scan_service tests.test_checkmarx_scan_service tests.test_jenkins_service tests.test_sonar_service
+checkmarx-mcp-server
+```
+
+If you do not need the MCP server, install with `pip install -e .[dev]` instead. If you only need the runtime CLI entrypoints, `pip install -e .` is sufficient.
+
+For the most portable demo setup, keep `.env` in mock mode first, verify the tests pass, and only then switch the machine to live credentials.
 
 ## Install
 
@@ -214,6 +246,47 @@ SONAR_TOKEN=your_sonar_user_token
 # Default is mock in this workspace.
 CHECKMARX_DSCAN_DATA_SOURCE=mock
 ```
+
+Minimal `.env` for mock-only MCP usage:
+
+```dotenv
+CHECKMARX_DSCAN_DATA_SOURCE=mock
+```
+
+That single variable is the only `.env` entry you need to force bundled mock payloads on any machine.
+
+What is mandatory for mock mode:
+
+- `CHECKMARX_DSCAN_DATA_SOURCE=mock`
+        Recommended even though the code defaults to `mock`, because it removes ambiguity on fresh machines and in MCP clients.
+
+What is not mandatory for mock mode:
+
+- `CHECKMARX_BASE_URL`
+- `CHECKMARX_API_TOKEN`
+- `JENKINS_USERNAME`
+- `JENKINS_API_TOKEN`
+- `SONAR_BASE_URL`
+- `SONAR_TOKEN`
+
+Optional convenience values for mock mode:
+
+- `JENKINS_JOB_URL`
+        Only useful if you want to call `jenkins_artifact` without passing `job_url` in the CLI or MCP tool call.
+- `CHECKMARX_DSCAN_ENV_FILE`
+        Useful when your MCP client launches the server outside the workspace root and you want it to load a specific env file.
+
+To switch the same machine to live services later, change `CHECKMARX_DSCAN_DATA_SOURCE=live` and then add only the credentials required by the workflow you intend to call.
+
+## Validation
+
+The validation command used in this workspace for a mock-safe check is:
+
+```bash
+python -m unittest tests.test_agent_adapters tests.test_config tests.test_project_catalog_service tests.test_project_scan_service tests.test_checkmarx_scan_service tests.test_jenkins_service tests.test_sonar_service
+```
+
+When you want to force mock mode regardless of what is already in the shell environment, set `CHECKMARX_DSCAN_DATA_SOURCE=mock` before running the command.
 
 ## How to generate a Jenkins API token
 
@@ -461,6 +534,8 @@ Or via module form:
 ```bash
 python -m checkmarx_dscan.interfaces.agents.mcp
 ```
+
+If you want the MCP server to stay fully offline and use bundled demo data, make sure `.env` contains `CHECKMARX_DSCAN_DATA_SOURCE=mock` before starting it.
 
 The MCP server exposes three tools:
 

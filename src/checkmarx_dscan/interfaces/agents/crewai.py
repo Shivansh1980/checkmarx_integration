@@ -125,6 +125,7 @@ else:
 	class JenkinsArtifactToolInput(BaseModel):
 		job_url: str = Field(..., description="Full Jenkins job URL to inspect for the Checkmarx artifact.")
 		env_file: str = Field(default=".env", description="Path to a .env file containing Jenkins settings.")
+		pr_number: int | None = Field(default=None, description="PR number to resolve under a Jenkins change-requests view. If omitted, the latest PR job is used.")
 		build_number: int | None = Field(default=None, description="Specific build number to inspect. If omitted, the tool tracks the active build or falls back to the latest completed build.")
 		artifact_name: str = Field(default="", description="Exact artifact file name to retrieve. Defaults to checkmarx-ast-results.json.")
 		report_profile: str = Field(default="compact", description="Accepted for compatibility with MCP clients. Current responses are compact by default.")

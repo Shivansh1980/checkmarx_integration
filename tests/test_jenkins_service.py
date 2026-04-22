@@ -348,6 +348,126 @@ class JenkinsServiceTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["build_selected_from"], "lastCompletedBuild-artifactFallback")
         self.assertEqual(payload["summary"]["report_total_findings"], 240)
 
+    def test_execute_with_change_requests_view_and_explicit_pr_number_resolves_pr_job(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        class FakeClient:
+            def list_jobs(self, resource_url: str) -> list[dict[str, object]]:
+                raise AssertionError("list_jobs should not be called when pr_number is provided")
+
+            def get_build_reference(self, job_url: str, reference: str) -> dict[str, object] | None:
+                calls.append((reference, job_url))
+                return {
+                    "number": 1120,
+                    "building": False,
+                    "result": "FAILURE",
+                    "url": f"{job_url}/1120/",
+                    "artifacts": [
+                        {
+                            "fileName": "checkmarx-ast-results.json",
+                            "relativePath": "cx.tmp/checkmarx-ast-results.json",
+                            "displayPath": "checkmarx-ast-results.json",
+                        }
+                    ],
+                }
+
+            def get_build(self, job_url: str, build_number: int, *, not_found_is_none: bool = False) -> dict[str, object] | None:
+                return {
+                    "number": build_number,
+                    "url": f"{job_url}/{build_number}/",
+                    "result": "FAILURE",
+                    "building": False,
+                    "artifacts": [
+                        {
+                            "fileName": "checkmarx-ast-results.json",
+                            "relativePath": "cx.tmp/checkmarx-ast-results.json",
+                            "displayPath": "checkmarx-ast-results.json",
+                        }
+                    ],
+                }
+
+            def build_artifact_download_url(self, build_payload: dict[str, object], relative_path: str, job_url: str, build_number: int) -> str:
+                return f"{job_url}/{build_number}/artifact/{relative_path}"
+
+            def download_artifact_json(self, download_url: str) -> dict[str, object]:
+                return {"TotalIssues": 5, "ProjectName": "demo", "BranchName": "PR-112", "ScanID": "scan-pr-112"}
+
+        service = JenkinsArtifactService(JenkinsCredentials())
+        service.client = FakeClient()
+
+        report = service.execute(
+            JenkinsArtifactRequest(
+                job_url="http://jenkins/view/change-requests",
+                pr_number=112,
+                include_raw=False,
+            )
+        )
+
+        payload = report.to_dict(include_raw=False)
+        self.assertEqual(payload["request"]["job_url"], "http://jenkins/view/change-requests/job/PR-112")
+        self.assertEqual(payload["request"]["pr_number"], 112)
+        self.assertEqual(calls[0][1], "http://jenkins/view/change-requests/job/PR-112")
+
+    def test_execute_with_change_requests_view_and_no_pr_number_uses_latest_pr_job(self) -> None:
+        class FakeClient:
+            def list_jobs(self, resource_url: str) -> list[dict[str, object]]:
+                return [
+                    {"name": "PR-109", "url": f"{resource_url}/job/PR-109/"},
+                    {"name": "PR-112", "url": f"{resource_url}/job/PR-112/"},
+                    {"name": "release_1", "url": "http://jenkins/job/release_1/"},
+                ]
+
+            def get_build_reference(self, job_url: str, reference: str) -> dict[str, object] | None:
+                return {
+                    "number": 1120,
+                    "building": False,
+                    "result": "FAILURE",
+                    "url": f"{job_url}/1120/",
+                    "artifacts": [
+                        {
+                            "fileName": "checkmarx-ast-results.json",
+                            "relativePath": "cx.tmp/checkmarx-ast-results.json",
+                            "displayPath": "checkmarx-ast-results.json",
+                        }
+                    ],
+                }
+
+            def get_build(self, job_url: str, build_number: int, *, not_found_is_none: bool = False) -> dict[str, object] | None:
+                return {
+                    "number": build_number,
+                    "url": f"{job_url}/{build_number}/",
+                    "result": "FAILURE",
+                    "building": False,
+                    "artifacts": [
+                        {
+                            "fileName": "checkmarx-ast-results.json",
+                            "relativePath": "cx.tmp/checkmarx-ast-results.json",
+                            "displayPath": "checkmarx-ast-results.json",
+                        }
+                    ],
+                }
+
+            def build_artifact_download_url(self, build_payload: dict[str, object], relative_path: str, job_url: str, build_number: int) -> str:
+                return f"{job_url}/{build_number}/artifact/{relative_path}"
+
+            def download_artifact_json(self, download_url: str) -> dict[str, object]:
+                return {"TotalIssues": 7, "ProjectName": "demo", "BranchName": "PR-112", "ScanID": "scan-pr-112"}
+
+        service = JenkinsArtifactService(JenkinsCredentials())
+        service.client = FakeClient()
+
+        report = service.execute(
+            JenkinsArtifactRequest(
+                job_url="http://jenkins/view/change-requests",
+                include_raw=False,
+            )
+        )
+
+        payload = report.to_dict(include_raw=False)
+        self.assertEqual(payload["request"]["job_url"], "http://jenkins/view/change-requests/job/PR-112")
+        self.assertEqual(payload["request"]["pr_number"], 112)
+        self.assertEqual(payload["summary"]["report_total_findings"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()
