@@ -8,6 +8,14 @@ from ...domain.models import REPORT_PROFILE_FULL, normalize_report_profile, seri
 from ...shared.utils import utc_now_iso
 
 
+_MOCK_DEMO_PROJECT_ROOT = "demo/mock_providerportal_web"
+_MOCK_DEMO_PACKAGE_JSON = f"{_MOCK_DEMO_PROJECT_ROOT}/package.json"
+_MOCK_DEMO_PACKAGE_LOCK = f"{_MOCK_DEMO_PROJECT_ROOT}/package-lock.json"
+_MOCK_DEMO_DOCKERFILE = f"{_MOCK_DEMO_PROJECT_ROOT}/Dockerfile"
+_MOCK_DEMO_RESET_COMMAND = "python tools/mock_demo_project.py reset"
+_MOCK_DEMO_INJECT_COMMAND = "python tools/mock_demo_project.py inject"
+
+
 _CHECKMARX_FINDINGS = [
     {
         "index": 1,
@@ -18,13 +26,14 @@ _CHECKMARX_FINDINGS = [
         "title": "axios",
         "description": "Mock dependency vulnerability retained for demo workflows.",
         "location": {
-            "filename": "package-lock.json",
-            "display": "package-lock.json",
+            "filename": _MOCK_DEMO_PACKAGE_JSON,
+            "display": f"{_MOCK_DEMO_PACKAGE_JSON}:12",
+            "line": 12,
         },
         "package_name": "axios",
         "package_version": "0.16.2",
         "recommended_version": "1.12.2",
-        "fix_recommendation": "Upgrade axios to 1.12.2 or newer.",
+        "fix_recommendation": "Upgrade axios to 1.12.2 or newer in package.json and regenerate package-lock.json.",
         "references": ["https://example.test/advisories/CVE-2026-10001"],
     },
     {
@@ -36,8 +45,8 @@ _CHECKMARX_FINDINGS = [
         "title": "Container runs as root",
         "description": "Mock infrastructure finding for demo workflows.",
         "location": {
-            "filename": "Dockerfile",
-            "display": "Dockerfile:12",
+            "filename": _MOCK_DEMO_DOCKERFILE,
+            "display": f"{_MOCK_DEMO_DOCKERFILE}:12",
             "line": 12,
         },
         "category": "Docker",
@@ -45,6 +54,20 @@ _CHECKMARX_FINDINGS = [
         "references": ["https://example.test/kics/non-root"],
     },
 ]
+
+
+def _mock_demo_project_details() -> dict[str, Any]:
+    return {
+        "name": "mock_providerportal_web",
+        "root": _MOCK_DEMO_PROJECT_ROOT,
+        "managed_files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK, _MOCK_DEMO_DOCKERFILE],
+        "reset_command": _MOCK_DEMO_RESET_COMMAND,
+        "inject_command": _MOCK_DEMO_INJECT_COMMAND,
+        "notes": [
+            "This project is intentionally vulnerable for mock-only demos.",
+            "Let Copilot apply fixes to the files listed in managed_files, then run the reset command to restore the vulnerable baseline.",
+        ],
+    }
 
 
 def _checkmarx_agent_report() -> dict[str, Any]:
@@ -78,9 +101,9 @@ def _checkmarx_agent_report() -> dict[str, Any]:
                 "package_name": "axios",
                 "package_version": "0.16.2",
                 "recommended_version": "1.12.2",
-                "location": "package-lock.json",
+                "location": f"{_MOCK_DEMO_PACKAGE_JSON}:12",
                 "vulnerability_count": 1,
-                "fix_recommendation": "Upgrade axios to 1.12.2 or newer.",
+                "fix_recommendation": "Upgrade axios to 1.12.2 or newer in package.json and regenerate package-lock.json.",
             }
         ],
         "top_fix_targets": [
@@ -89,7 +112,8 @@ def _checkmarx_agent_report() -> dict[str, Any]:
                 "target": "axios",
                 "current_version": "0.16.2",
                 "recommended_version": "1.12.2",
-                "reason": "Clears the highest-severity dependency issue in the demo report.",
+                "reason": "Clears the highest-severity dependency issue in the demo project.",
+                "files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK],
             }
         ],
         "dependency_issues": [_CHECKMARX_FINDINGS[0]],
@@ -135,6 +159,7 @@ def _build_checkmarx_report_payload(*, include_archive: bool) -> dict[str, Any]:
         },
         "findings": deepcopy(_CHECKMARX_FINDINGS),
         "agent_report": _checkmarx_agent_report(),
+        "demo_project": _mock_demo_project_details(),
         "raw": {
             "project": {"id": "demo-project-id", "name": "demo-providerportal-web"},
             "final_scan": {"id": "demo-scan-id", "status": {"value": "Completed"}},
@@ -151,7 +176,7 @@ def _build_checkmarx_report_payload(*, include_archive: bool) -> dict[str, Any]:
         }
         payload["request"].update(
             {
-                "source_path": "./demo-source",
+                "source_path": f"./{_MOCK_DEMO_PROJECT_ROOT}",
                 "scan_types": ["sca", "kics"],
                 "poll_interval": 15,
                 "poll_timeout": 7200,
@@ -293,7 +318,7 @@ _JENKINS_FIXTURE = {
                 "type": "sca",
                 "severity": "critical",
                 "title": "axios 0.16.2",
-                "location": "package-lock.json",
+                "location": f"{_MOCK_DEMO_PACKAGE_JSON}:12",
                 "vulnerability_count": 1,
                 "recommended_version": "1.12.2",
             }
@@ -302,7 +327,8 @@ _JENKINS_FIXTURE = {
             {
                 "target": "axios",
                 "recommended_version": "1.12.2",
-                "reason": "Clears the highest-severity dependency issue in the demo report.",
+                "reason": "Clears the highest-severity dependency issue in the demo project.",
+                "files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK],
             }
         ],
         "vulnerabilities": deepcopy(_CHECKMARX_FINDINGS),
@@ -635,6 +661,18 @@ def _update_checkmarx_request(payload: dict[str, Any], *, project: str = "", pro
         request["source_path"] = source.strip()
 
 
+def _update_demo_project_metadata(payload: dict[str, Any], *, source: str = "") -> None:
+    demo_project = payload.get("demo_project") if isinstance(payload.get("demo_project"), dict) else None
+    if demo_project is None:
+        return
+    resolved_root = source.strip() or _MOCK_DEMO_PROJECT_ROOT
+    demo_project["root"] = resolved_root
+    managed_files = []
+    for file_name in ("package.json", "package-lock.json", "Dockerfile"):
+        managed_files.append(f"{resolved_root.rstrip('/')}/{file_name}")
+    demo_project["managed_files"] = managed_files
+
+
 def load_mock_checkmarx_payload(*, scan_mode: str, include_raw: bool, profile: str | None = None, project: str = "", project_query: str = "", branch: str = "", source: str = "") -> dict[str, Any]:
     if scan_mode == "projects":
         payload = {
@@ -669,6 +707,7 @@ def load_mock_checkmarx_payload(*, scan_mode: str, include_raw: bool, profile: s
     else:
         payload = _build_checkmarx_report_payload(include_archive=False)
     _update_checkmarx_request(payload, project=project, project_query=project_query, branch=branch, source=source)
+    _update_demo_project_metadata(payload, source=source)
     return _apply_report_options(payload, include_raw=include_raw, profile=profile)
 
 

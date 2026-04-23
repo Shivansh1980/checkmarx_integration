@@ -33,6 +33,7 @@ dist/
 
 # Generated reports and artifacts
 output/
+_restore_test/
 
 # OS files
 Thumbs.db

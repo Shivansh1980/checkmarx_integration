@@ -1,0 +1,15 @@
+{
+  "name": "mock-providerportal-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Intentionally vulnerable demo project for mock Checkmarx remediation flows.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "demo:reset": "python ../../tools/mock_demo_project.py reset"
+  },
+  "dependencies": {
+    "axios": "0.16.2",
+    "express": "4.21.2"
+  }
+}

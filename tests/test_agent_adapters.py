@@ -183,6 +183,19 @@ class AgentAdapterTests(unittest.TestCase):
 		resolve_credentials_mock.assert_not_called()
 		service_cls.assert_not_called()
 
+	def test_execute_checkmarx_scan_tool_mock_mode_points_to_demo_project_files(self) -> None:
+		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True):
+			payload = execute_checkmarx_scan_tool(project="demo-providerportal-web", include_raw=False)
+
+		self.assertEqual(payload["demo_project"]["root"], "demo/mock_providerportal_web")
+		self.assertEqual(payload["demo_project"]["reset_command"], "python tools/mock_demo_project.py reset")
+		locations = {
+			item["location"]["filename"]
+			for item in payload["agent_report"]["vulnerabilities"]
+		}
+		self.assertIn("demo/mock_providerportal_web/package.json", locations)
+		self.assertIn("demo/mock_providerportal_web/Dockerfile", locations)
+
 	def test_execute_sonar_tool_mock_mode_returns_structured_payload(self) -> None:
 		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True), \
 			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials") as resolve_credentials_mock:

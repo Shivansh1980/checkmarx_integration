@@ -255,6 +255,25 @@ CHECKMARX_DSCAN_DATA_SOURCE=mock
 
 That single variable is the only `.env` entry you need to force bundled mock payloads on any machine.
 
+## Mock demo project
+
+The repository now includes a resettable demo target at `demo/mock_providerportal_web`.
+
+The mock Checkmarx findings intentionally point to these real files:
+
+- `demo/mock_providerportal_web/package.json`
+- `demo/mock_providerportal_web/package-lock.json`
+- `demo/mock_providerportal_web/Dockerfile`
+
+Recommended demo flow:
+
+1. Keep `CHECKMARX_DSCAN_DATA_SOURCE=mock` in `.env`.
+2. Run the MCP server.
+3. Ask Copilot to inspect the mock findings and apply the recommended fixes in `demo/mock_providerportal_web`.
+4. After the demo, restore the vulnerable baseline with `python tools/mock_demo_project.py reset`.
+
+You can check the current demo-project state with `python tools/mock_demo_project.py status`.
+
 What is mandatory for mock mode:
 
 - `CHECKMARX_DSCAN_DATA_SOURCE=mock`
