@@ -57,10 +57,12 @@ JENKINS_ARTIFACT_TOOL_DESCRIPTION = (
 
 SONAR_TOOL_NAME = "sonar"
 SONAR_TOOL_DESCRIPTION = (
-	"Unified SonarQube and local coverage tool. Use operation=access_probe to validate server access, operation=projects to "
-	"discover project keys, operation=remote_report to fetch the latest SonarQube coverage for a project, operation=file_detail "
-	"to inspect one file, and operation=local_report or local_quality_gate to run pytest-based local coverage in the current workspace "
-	"and predict whether the code is likely to clear the requested Sonar coverage threshold before push."
+	"Unified SonarQube tool. Use operation=access_probe to validate server access, operation=projects to discover project keys, "
+	"operation=remote_report to fetch the latest SonarQube coverage for a project, operation=file_detail to inspect one file, "
+	"operation=local_report to run pytest-based local coverage on Python workspaces (convenience), and "
+	"operation=local_quality_gate to fetch the workspace project's Sonar quality gate definition and predict pass/fail BEFORE push. "
+	"local_quality_gate does NOT run any tests itself; the agent measures coverage with the workspace's own tooling "
+	"(pytest+coverage, jest, dotnet test, jacoco, go cover, ...) and supplies the numbers via local_metrics on the next call."
 )
 
 
@@ -224,8 +226,15 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 	operation = _resolve_sonar_operation(kwargs.get("operation", "remote_report"))
 	data_source = resolve_data_source()
 	if data_source == "mock":
+		mock_local_metrics = kwargs.get("local_metrics")
+		if isinstance(mock_local_metrics, str) and mock_local_metrics.strip():
+			import json as _json
+			try:
+				mock_local_metrics = _json.loads(mock_local_metrics)
+			except _json.JSONDecodeError:
+				mock_local_metrics = None
 		payload = load_mock_sonar_payload(
-			operation="local_report" if operation == "local_quality_gate" else operation,
+			operation=operation,
 			include_raw=kwargs.get("include_raw", False),
 			project=kwargs.get("project", ""),
 			branch=kwargs.get("branch", ""),
@@ -234,6 +243,7 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			coverage_threshold=kwargs.get("coverage_threshold", 80.0),
 			local_working_directory=kwargs.get("local_working_directory", ""),
 			compare_with_remote=kwargs.get("compare_with_remote", False),
+			local_metrics=mock_local_metrics if isinstance(mock_local_metrics, dict) else None,
 		)
 		if kwargs.get("output_json"):
 			default_file_name = {
@@ -244,19 +254,13 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 				"local_report": "sonar_local_coverage_report.json",
 				"local_quality_gate": "sonar_local_quality_gate_report.json",
 			}[operation]
-			if operation == "local_quality_gate":
-				payload["operation"] = "local_quality_gate"
-				payload["report_type"] = "local_quality_gate_prediction"
 			write_output_json(kwargs["output_json"], payload, default_file_name=default_file_name)
-		elif operation == "local_quality_gate":
-			payload["operation"] = "local_quality_gate"
-			payload["report_type"] = "local_quality_gate_prediction"
 		return payload
 	credentials = resolve_sonar_credentials(
 		base_url=kwargs.get("base_url", ""),
 		token=kwargs.get("token", ""),
 		timeout=kwargs.get("timeout"),
-		require_base_url=operation not in {"local_report", "local_quality_gate"},
+		require_base_url=operation != "local_report",
 	)
 	service = SonarCoverageService(credentials)
 	if operation == "access_probe":
@@ -285,7 +289,7 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			use_internal_fallbacks=kwargs.get("use_internal_fallbacks", False),
 			include_raw=kwargs.get("include_raw", False),
 		)
-	elif operation in {"local_report", "local_quality_gate"}:
+	elif operation == "local_report":
 		payload = service.local_coverage_report(
 			project=kwargs.get("project", ""),
 			project_query=kwargs.get("project_query", ""),
@@ -300,9 +304,24 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			compare_with_remote=kwargs.get("compare_with_remote", False),
 			include_raw=kwargs.get("include_raw", False),
 		)
-		if operation == "local_quality_gate":
-			payload["operation"] = "local_quality_gate"
-			payload["report_type"] = "local_quality_gate_prediction"
+	elif operation == "local_quality_gate":
+		local_metrics_arg = kwargs.get("local_metrics")
+		if isinstance(local_metrics_arg, str) and local_metrics_arg.strip():
+			import json as _json
+			try:
+				local_metrics_arg = _json.loads(local_metrics_arg)
+			except _json.JSONDecodeError as exc:
+				raise CheckmarxError(f"local_metrics must be a JSON object: {exc}") from exc
+		if local_metrics_arg is not None and not isinstance(local_metrics_arg, dict):
+			raise CheckmarxError("local_metrics must be a JSON object mapping metric keys to numeric values.")
+		payload = service.predict_quality_gate(
+			project=kwargs.get("project", ""),
+			project_query=kwargs.get("project_query", ""),
+			branch=kwargs.get("branch", ""),
+			pull_request=kwargs.get("pull_request", ""),
+			working_directory=kwargs.get("local_working_directory", ""),
+			local_metrics=local_metrics_arg,
+		)
 	else:
 		payload = service.coverage_report(
 			project=kwargs["project"],

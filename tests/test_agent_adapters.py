@@ -178,15 +178,27 @@ class AgentAdapterTests(unittest.TestCase):
 			mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
 			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials", return_value=object()) as resolve_credentials_mock, \
 			mock.patch("checkmarx_dscan.interfaces.agents.common.SonarCoverageService") as service_cls:
-			service_cls.return_value.local_coverage_report.return_value = {"ok": True, "operation": "local_report", "report_type": "local_coverage_prediction", "quality_gate": {"status": "pass"}}
-			payload = execute_sonar_tool(operation="local_quality_gate", coverage_threshold=80.0)
+			service_cls.return_value.predict_quality_gate.return_value = {
+				"ok": True,
+				"operation": "local_quality_gate",
+				"report_type": "local_quality_gate_prediction",
+				"quality_gate": {"status": "needs_local_metrics", "would_pass": None},
+			}
+			payload = execute_sonar_tool(
+				operation="local_quality_gate",
+				project="demo-providerportal-web",
+				local_metrics={"coverage": 86.0},
+			)
 
 		self.assertTrue(payload["ok"])
 		self.assertEqual(payload["operation"], "local_quality_gate")
 		self.assertEqual(payload["report_type"], "local_quality_gate_prediction")
-		self.assertEqual(payload["quality_gate"]["status"], "pass")
-		resolve_credentials_mock.assert_called_once_with(base_url="", token="", timeout=None, require_base_url=False)
-		service_cls.return_value.local_coverage_report.assert_called_once()
+		resolve_credentials_mock.assert_called_once_with(base_url="", token="", timeout=None, require_base_url=True)
+		service_cls.return_value.predict_quality_gate.assert_called_once()
+		_, kwargs = service_cls.return_value.predict_quality_gate.call_args
+		self.assertEqual(kwargs["local_metrics"], {"coverage": 86.0})
+		self.assertEqual(kwargs["project"], "demo-providerportal-web")
+		service_cls.return_value.local_coverage_report.assert_not_called()
 
 	def test_execute_sonar_tool_local_report_uses_mock_payload_in_mock_mode(self) -> None:
 		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True), \

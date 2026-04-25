@@ -722,6 +722,81 @@ _SONAR_FILE_DETAIL = {
 }
 
 
+_SONAR_LOCAL_QUALITY_GATE = {
+    "ok": True,
+    "server": "sonar",
+    "operation": "local_quality_gate",
+    "report_type": "local_quality_gate_prediction",
+    "generated_at": utc_now_iso(),
+    "sonar_project": {
+        "lookup_attempted": True,
+        "matched": True,
+        "query_used": "demo-providerportal-web",
+        "match_strategy": "exact_key",
+        "project_key": "demo-providerportal-web",
+        "project_name": "Demo Provider Portal Web",
+        "branch_name": "release_1",
+        "attempts": [],
+    },
+    "quality_gate": {
+        "project_key": "demo-providerportal-web",
+        "branch": "release_1",
+        "pull_request": "",
+        "current_remote_status": "ERROR",
+        "ignored_conditions": False,
+        "definition": [
+            {
+                "metric": "coverage",
+                "comparator": "LT",
+                "error_threshold": 80.0,
+                "remote_actual": 71.4,
+                "remote_status": "ERROR",
+                "on_new_code": False,
+                "evaluable_locally": True,
+            },
+            {
+                "metric": "new_coverage",
+                "comparator": "LT",
+                "error_threshold": 80.0,
+                "remote_actual": 65.0,
+                "remote_status": "ERROR",
+                "on_new_code": True,
+                "evaluable_locally": False,
+            },
+        ],
+        "local_evaluation": None,
+        "would_pass": None,
+        "status": "needs_local_metrics",
+    },
+    "workspace_root": ".",
+    "measurement_instructions": {
+        "purpose": "Measure these coverage metrics in the workspace using your stack's tooling, then re-call this tool with the numbers in `local_metrics`.",
+        "required_metrics_for_full_prediction": ["coverage"],
+        "all_gate_metrics": ["coverage", "new_coverage"],
+        "local_metrics_payload_shape": {
+            "coverage": "<overall percent 0-100>",
+            "line_coverage": "<line percent 0-100>",
+            "branch_coverage": "<branch percent 0-100>",
+        },
+        "stack_command_examples": {
+            "python": "python -m coverage run -m pytest && python -m coverage json -o coverage.json",
+            "node_jest": "npx jest --coverage --json --outputFile=jest-coverage.json",
+            "dotnet": "dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=json",
+            "java_maven": "mvn -B test jacoco:report",
+            "go": "go test ./... -coverprofile=cover.out && go tool cover -func=cover.out",
+        },
+        "notes": [
+            "Conditions on `new_*` metrics typically require a baseline comparison and may not be evaluable from a single local run.",
+            "You can call this tool with only the metrics you can measure; unsupported conditions will be reported separately.",
+        ],
+    },
+    "notes": [
+        "This operation does not run any local tests; it only fetches the gate definition and evaluates supplied metrics.",
+        "To finalize a pre-push pass/fail decision, measure the metrics listed in `measurement_instructions` and call this tool again with `local_metrics`.",
+    ],
+}
+
+
 _SONAR_LOCAL_REPORT = {
     "ok": True,
     "server": "sonar",
@@ -990,9 +1065,7 @@ def load_mock_jenkins_payload(*, include_raw: bool, profile: str | None = None, 
     return _apply_report_options(payload, include_raw=include_raw, profile=profile)
 
 
-def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, project: str = "", branch: str = "", file_path: str = "", file_key: str = "", coverage_threshold: float | None = None, local_working_directory: str = "", compare_with_remote: bool = False) -> dict[str, Any]:
-    if operation == "local_quality_gate":
-        operation = "local_report"
+def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, project: str = "", branch: str = "", file_path: str = "", file_key: str = "", coverage_threshold: float | None = None, local_working_directory: str = "", compare_with_remote: bool = False, local_metrics: dict[str, Any] | None = None) -> dict[str, Any]:
     if operation == "access_probe":
         payload = deepcopy(_SONAR_ACCESS_PROBE)
     elif operation == "projects":
@@ -1001,6 +1074,72 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
         payload = deepcopy(_SONAR_FILE_DETAIL)
     elif operation == "local_report":
         payload = deepcopy(_SONAR_LOCAL_REPORT)
+    elif operation == "local_quality_gate":
+        payload = deepcopy(_SONAR_LOCAL_QUALITY_GATE)
+        payload["generated_at"] = utc_now_iso()
+        if project.strip():
+            payload["sonar_project"]["project_key"] = project.strip()
+            payload["quality_gate"]["project_key"] = project.strip()
+        if branch.strip():
+            payload["sonar_project"]["branch_name"] = branch.strip()
+            payload["quality_gate"]["branch"] = branch.strip()
+        if isinstance(local_metrics, dict) and local_metrics:
+            normalized: dict[str, float] = {}
+            for key, value in local_metrics.items():
+                try:
+                    normalized[str(key).strip()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            evaluated: list[dict[str, Any]] = []
+            unsupported: list[dict[str, Any]] = []
+            for condition in payload["quality_gate"].get("definition", []):
+                metric = condition.get("metric")
+                threshold = condition.get("error_threshold")
+                comparator = (condition.get("comparator") or "").upper()
+                actual = normalized.get(metric)
+                if actual is None or threshold is None:
+                    unsupported.append({
+                        "metric": metric, "comparator": comparator, "threshold": threshold,
+                        "remote_actual": condition.get("remote_actual"),
+                        "remote_status": condition.get("remote_status"),
+                        "reason": "No local value supplied for this metric in `local_metrics`.",
+                    })
+                    continue
+                passes = (actual >= threshold) if comparator == "LT" else (actual <= threshold) if comparator == "GT" else (actual == threshold)
+                evaluated.append({
+                    "metric": metric, "comparator": comparator, "threshold": threshold,
+                    "local_actual": round(float(actual), 2),
+                    "remote_actual": condition.get("remote_actual"),
+                    "remote_status": condition.get("remote_status"),
+                    "status": "pass" if passes else "fail",
+                })
+            failed = [item for item in evaluated if item["status"] == "fail"]
+            if failed:
+                status = "fail"
+                would_pass: bool | None = False
+            elif evaluated and not unsupported:
+                status = "pass"
+                would_pass = True
+            elif evaluated and unsupported:
+                status = "likely_pass_partial"
+                would_pass = None
+            else:
+                status = "needs_local_metrics"
+                would_pass = None
+            payload["quality_gate"]["local_evaluation"] = {
+                "status": status,
+                "would_pass": would_pass,
+                "evaluated_conditions": evaluated,
+                "unsupported_conditions": unsupported,
+                "failing_conditions": failed,
+                "local_metrics_received": normalized,
+            }
+            payload["quality_gate"]["would_pass"] = would_pass
+            payload["quality_gate"]["status"] = status
+            payload.pop("measurement_instructions", None)
+        if not include_raw:
+            payload.pop("raw", None)
+        return payload
     else:
         payload = deepcopy(_SONAR_REMOTE_REPORT)
 

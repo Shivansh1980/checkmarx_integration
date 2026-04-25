@@ -153,7 +153,7 @@ else:
 			return run_jenkins_artifact_tool(**kwargs)
 
 	class SonarToolInput(BaseModel):
-		operation: str = Field(default="remote_report", description="Sonar operation to run. Allowed values: access_probe, projects, remote_report, file_detail, local_report, local_quality_gate.")
+		operation: str = Field(default="remote_report", description="Sonar operation to run. Allowed values: access_probe, projects, remote_report, file_detail, local_report (Python convenience that runs pytest+coverage), local_quality_gate (stack-agnostic; does NOT run tests, supply local_metrics).")
 		project: str = Field(default="", description="Sonar project key for remote_report, file_detail, or local_report comparison.")
 		base_url: str = Field(default="", description="Optional override for SONAR_BASE_URL.")
 		token: str = Field(default="", description="Optional override for SONAR_TOKEN.")
@@ -177,6 +177,7 @@ else:
 		local_source_paths: str = Field(default="", description="For local_report, comma-separated source paths to pass to coverage.py.")
 		local_pytest_args: str = Field(default="", description="For local_report, additional pytest arguments.")
 		local_timeout: int | None = Field(default=None, description="For local_report, local command timeout in seconds.")
+		local_metrics: dict[str, Any] | None = Field(default=None, description="For local_quality_gate, locally-measured metrics keyed by Sonar metric name (e.g. {'coverage': 78.5, 'line_coverage': 82.0, 'branch_coverage': 65.0}). Omit on the first call to receive measurement_instructions.")
 		compare_with_remote: bool = Field(default=False, description="For local_report, compare local results with remote Sonar project coverage when available.")
 		include_raw: bool = Field(default=False, description="Include raw Sonar or local coverage payloads in the JSON response.")
 		output_json: str | None = Field(default=None, description="Optional path where the Sonar report should be written.")

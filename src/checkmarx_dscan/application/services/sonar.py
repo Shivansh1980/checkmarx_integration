@@ -1488,6 +1488,231 @@ class SonarCoverageService:
 			}
 		return payload
 
+	def predict_quality_gate(
+		self,
+		*,
+		project: str = "",
+		project_query: str = "",
+		branch: str = "",
+		pull_request: str = "",
+		working_directory: str = "",
+		local_metrics: dict[str, Any] | None = None,
+	) -> dict[str, Any]:
+		"""Predict whether the workspace will clear the Sonar quality gate.
+
+		This operation does NOT run any local tests. Callers (typically the
+		coding agent) are expected to measure coverage themselves using whatever
+		tooling fits the workspace stack (pytest+coverage, jest, dotnet test,
+		jacoco, ...) and pass the resulting numbers in via ``local_metrics``.
+
+		The tool returns:
+		  * The Sonar gate definition (conditions, comparators, thresholds)
+		  * The current remote gate status
+		  * If ``local_metrics`` is supplied, a per-condition local evaluation
+		    and an overall ``would_pass`` decision
+		  * If ``local_metrics`` is omitted, ``measurement_instructions`` that
+		    tell the caller exactly which metrics to measure and the JSON shape
+		    to send back on the next call.
+		"""
+		if not self.credentials.base_url:
+			raise SonarError("SONAR_BASE_URL must be configured to fetch the quality gate definition.")
+
+		workspace_root = Path(working_directory).expanduser().resolve() if str(working_directory or "").strip() else _default_workspace_root()
+
+		sonar_project = self._resolve_remote_project_for_workspace(
+			explicit_project=project,
+			project_query=project_query,
+			workspace_root=workspace_root,
+			branch=branch,
+			pull_request=pull_request,
+		)
+		if not sonar_project.get("matched") or not sonar_project.get("project_key"):
+			raise SonarError(
+				"Could not resolve a Sonar project for this workspace. "
+				"Pass project=<sonar_project_key> or project_query=<name> explicitly."
+			)
+		project_key = str(sonar_project["project_key"])
+
+		try:
+			gate_payload, _ = self.client.get_quality_gate_status(
+				project_key=project_key, branch=branch, pull_request=pull_request
+			)
+		except SonarHttpError as exc:
+			raise SonarError(
+				f"Could not fetch quality gate status for {_format_remote_scope(project_key, branch=branch, pull_request=pull_request)}: {exc}"
+			) from exc
+
+		project_status = gate_payload.get("projectStatus") if isinstance(gate_payload.get("projectStatus"), dict) else {}
+		raw_conditions = project_status.get("conditions") if isinstance(project_status.get("conditions"), list) else []
+
+		gate_definition: list[dict[str, Any]] = []
+		for raw_condition in raw_conditions:
+			if not isinstance(raw_condition, dict):
+				continue
+			metric_key = str(raw_condition.get("metricKey") or "").strip()
+			gate_definition.append(
+				compact_dict(
+					{
+						"metric": metric_key,
+						"comparator": str(raw_condition.get("comparator") or "").strip().upper(),
+						"error_threshold": _safe_float(raw_condition.get("errorThreshold")),
+						"remote_actual": _safe_float(raw_condition.get("actualValue")),
+						"remote_status": raw_condition.get("status"),
+						"on_new_code": metric_key.startswith("new_"),
+						"evaluable_locally": metric_key in SONAR_LOCALLY_EVALUABLE_QUALITY_GATE_METRICS,
+					}
+				)
+			)
+
+		local_evaluation: dict[str, Any] | None = None
+		if local_metrics:
+			normalized_metrics: dict[str, float] = {}
+			for key, value in dict(local_metrics).items():
+				parsed = _safe_float(value)
+				if parsed is not None:
+					normalized_metrics[str(key).strip()] = float(parsed)
+
+			evaluated: list[dict[str, Any]] = []
+			unsupported: list[dict[str, Any]] = []
+			for raw_condition in raw_conditions:
+				if not isinstance(raw_condition, dict):
+					continue
+				metric_key = str(raw_condition.get("metricKey") or "").strip()
+				comparator = str(raw_condition.get("comparator") or "").strip().upper()
+				threshold = _safe_float(raw_condition.get("errorThreshold"))
+				local_actual = normalized_metrics.get(metric_key)
+				if local_actual is None or threshold is None:
+					unsupported.append(
+						compact_dict(
+							{
+								"metric": metric_key,
+								"comparator": comparator,
+								"threshold": threshold,
+								"remote_actual": _safe_float(raw_condition.get("actualValue")),
+								"remote_status": raw_condition.get("status"),
+								"reason": "No local value supplied for this metric in `local_metrics`."
+								if threshold is not None
+								else "Sonar did not report an error threshold for this condition.",
+							}
+						)
+					)
+					continue
+
+				passes = _evaluate_quality_gate_condition(
+					comparator=comparator, actual=local_actual, threshold=threshold
+				)
+				if passes is None:
+					unsupported.append(
+						compact_dict(
+							{
+								"metric": metric_key,
+								"comparator": comparator,
+								"threshold": threshold,
+								"reason": "Comparator is not supported by the predictor.",
+							}
+						)
+					)
+					continue
+				evaluated.append(
+					compact_dict(
+						{
+							"metric": metric_key,
+							"comparator": comparator,
+							"threshold": threshold,
+							"local_actual": round(float(local_actual), 2),
+							"remote_actual": _safe_float(raw_condition.get("actualValue")),
+							"remote_status": raw_condition.get("status"),
+							"status": "pass" if passes else "fail",
+						}
+					)
+				)
+
+			failed = [item for item in evaluated if item.get("status") == "fail"]
+			if failed:
+				overall_status = "fail"
+				would_pass: bool | None = False
+			elif evaluated and not unsupported:
+				overall_status = "pass"
+				would_pass = True
+			elif evaluated and unsupported:
+				overall_status = "likely_pass_partial"
+				would_pass = None
+			else:
+				overall_status = "needs_local_metrics"
+				would_pass = None
+
+			local_evaluation = {
+				"status": overall_status,
+				"would_pass": would_pass,
+				"evaluated_conditions": evaluated,
+				"unsupported_conditions": unsupported,
+				"failing_conditions": failed,
+				"local_metrics_received": normalized_metrics,
+			}
+
+		measurement_instructions: dict[str, Any] | None = None
+		if local_evaluation is None:
+			required_metrics = [
+				str(condition.get("metricKey") or "").strip()
+				for condition in raw_conditions
+				if isinstance(condition, dict) and str(condition.get("metricKey") or "").strip() in SONAR_LOCALLY_EVALUABLE_QUALITY_GATE_METRICS
+			]
+			all_metrics = [
+				str(condition.get("metricKey") or "").strip()
+				for condition in raw_conditions
+				if isinstance(condition, dict) and str(condition.get("metricKey") or "").strip()
+			]
+			measurement_instructions = {
+				"purpose": "Measure these coverage metrics in the workspace using your stack's tooling, then re-call this tool with the numbers in `local_metrics`.",
+				"required_metrics_for_full_prediction": required_metrics,
+				"all_gate_metrics": all_metrics,
+				"local_metrics_payload_shape": {
+					"coverage": "<overall percent 0-100>",
+					"line_coverage": "<line percent 0-100>",
+					"branch_coverage": "<branch percent 0-100>",
+				},
+				"stack_command_examples": {
+					"python": "python -m coverage run -m pytest && python -m coverage json -o coverage.json  (read totals.percent_covered and totals branch numbers)",
+					"node_jest": "npx jest --coverage --json --outputFile=jest-coverage.json  (read coverageMap totals)",
+					"node_vitest": "npx vitest run --coverage --reporter=json --outputFile=vitest-coverage.json",
+					"dotnet": "dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=json  (read CoverletOutput coverage.json)",
+					"java_maven": "mvn -B test jacoco:report  (read target/site/jacoco/jacoco.csv)",
+					"go": "go test ./... -coverprofile=cover.out && go tool cover -func=cover.out  (read 'total:' line)",
+				},
+				"notes": [
+					"Conditions on `new_*` metrics typically require a baseline comparison and may not be evaluable from a single local run.",
+					"You can call this tool with only the metrics you can measure; unsupported conditions will be reported separately.",
+				],
+			}
+
+		response: dict[str, Any] = {
+			"ok": True,
+			"server": "sonar",
+			"operation": "local_quality_gate",
+			"report_type": "local_quality_gate_prediction",
+			"generated_at": utc_now_iso(),
+			"sonar_project": sonar_project,
+			"quality_gate": {
+				"project_key": project_key,
+				"branch": branch or "",
+				"pull_request": pull_request or "",
+				"current_remote_status": str(project_status.get("status") or "NONE"),
+				"ignored_conditions": bool(project_status.get("ignoredConditions", False)),
+				"definition": gate_definition,
+				"local_evaluation": local_evaluation,
+				"would_pass": None if local_evaluation is None else local_evaluation.get("would_pass"),
+				"status": "needs_local_metrics" if local_evaluation is None else local_evaluation.get("status"),
+			},
+			"workspace_root": str(workspace_root),
+			"notes": [
+				"This operation does not run any local tests; it only fetches the gate definition and evaluates supplied metrics.",
+				"To finalize a pre-push pass/fail decision, measure the metrics listed in `measurement_instructions` and call this tool again with `local_metrics`.",
+			],
+		}
+		if measurement_instructions is not None:
+			response["measurement_instructions"] = measurement_instructions
+		return response
+
 	def file_coverage_detail(
 		self,
 		*,
