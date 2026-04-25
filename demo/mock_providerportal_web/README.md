@@ -7,6 +7,7 @@ Files that the mock scan points to:
 - `package.json`
 - `package-lock.json`
 - `Dockerfile`
+- `src/server.js`
 
 Reset the project back to the vulnerable baseline with:
 

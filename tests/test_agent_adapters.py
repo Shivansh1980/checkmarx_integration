@@ -173,6 +173,36 @@ class AgentAdapterTests(unittest.TestCase):
 		resolve_credentials_mock.assert_called_once_with(base_url="", token="", timeout=None, require_base_url=False)
 		service_cls.return_value.local_coverage_report.assert_called_once()
 
+	def test_execute_sonar_tool_local_quality_gate_alias_uses_local_coverage_report(self) -> None:
+		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "live"}, clear=True), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials", return_value=object()) as resolve_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.SonarCoverageService") as service_cls:
+			service_cls.return_value.local_coverage_report.return_value = {"ok": True, "operation": "local_report", "report_type": "local_coverage_prediction", "quality_gate": {"status": "pass"}}
+			payload = execute_sonar_tool(operation="local_quality_gate", coverage_threshold=80.0)
+
+		self.assertTrue(payload["ok"])
+		self.assertEqual(payload["operation"], "local_quality_gate")
+		self.assertEqual(payload["report_type"], "local_quality_gate_prediction")
+		self.assertEqual(payload["quality_gate"]["status"], "pass")
+		resolve_credentials_mock.assert_called_once_with(base_url="", token="", timeout=None, require_base_url=False)
+		service_cls.return_value.local_coverage_report.assert_called_once()
+
+	def test_execute_sonar_tool_local_report_uses_mock_payload_in_mock_mode(self) -> None:
+		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.load_mock_sonar_payload") as load_mock_payload, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials") as resolve_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.SonarCoverageService") as service_cls:
+			load_mock_payload.return_value = {"ok": True, "report_type": "local_coverage_prediction", "quality_gate": {"status": "pass"}}
+			payload = execute_sonar_tool(operation="local_report", coverage_threshold=85.0)
+
+		self.assertTrue(payload["ok"])
+		self.assertEqual(payload["report_type"], "local_coverage_prediction")
+		self.assertEqual(payload["quality_gate"]["status"], "pass")
+		load_mock_payload.assert_called_once()
+		resolve_credentials_mock.assert_not_called()
+		service_cls.assert_not_called()
+
 	def test_execute_checkmarx_scan_tool_mock_mode_skips_live_dependencies(self) -> None:
 		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True), \
 			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials") as resolve_credentials_mock, \
@@ -189,12 +219,15 @@ class AgentAdapterTests(unittest.TestCase):
 
 		self.assertEqual(payload["demo_project"]["root"], "demo/mock_providerportal_web")
 		self.assertEqual(payload["demo_project"]["reset_command"], "python tools/mock_demo_project.py reset")
+		self.assertEqual(payload["summary"]["total_findings"], 4)
 		locations = {
 			item["location"]["filename"]
 			for item in payload["agent_report"]["vulnerabilities"]
 		}
 		self.assertIn("demo/mock_providerportal_web/package.json", locations)
 		self.assertIn("demo/mock_providerportal_web/Dockerfile", locations)
+		self.assertIn("demo/mock_providerportal_web/src/server.js", locations)
+		self.assertIn("demo/mock_providerportal_web/src/server.js", payload["demo_project"]["managed_files"])
 
 	def test_execute_sonar_tool_mock_mode_returns_structured_payload(self) -> None:
 		with mock.patch.dict("os.environ", {"CHECKMARX_DSCAN_DATA_SOURCE": "mock"}, clear=True), \

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = ROOT / "demo" / "mock_providerportal_web"
 VULNERABLE_TEMPLATE_ROOT = DEMO_ROOT / ".mock_templates" / "vulnerable"
 MANAGED_FILES = ["package.json", "package-lock.json", "Dockerfile"]
+MANAGED_FILES = ["package.json", "package-lock.json", "Dockerfile", "src/server.js"]
 
 
 def _copy_vulnerable_baseline() -> list[Path]:

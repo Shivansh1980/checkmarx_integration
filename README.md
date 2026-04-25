@@ -23,7 +23,7 @@ Recommended tool selection order:
 - `jenkins_artifact`
                 Use this when you want the report attached to a Jenkins pipeline build or when Jenkins build selection matters. You can point `job_url` at a direct Jenkins job or at a PR change-requests view; when used with a change-requests view, pass `pr_number` to target one PR or omit it to use the latest available PR job. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to call Jenkins and optional Checkmarx enrichment live.
 - `sonar`
-        Use this single tool for all Sonar and local coverage flows. Set `operation=access_probe` to validate Sonar access, `operation=projects` to discover project keys, `operation=remote_report` for the latest Sonar coverage report, `operation=file_detail` for one file, and `operation=local_report` to run local pytest coverage and predict whether the current branch is likely to clear the requested threshold before push. Use `CHECKMARX_DSCAN_DATA_SOURCE=live` when you want to query a real Sonar server.
+                Use this single tool for all Sonar and local coverage flows. Set `operation=access_probe` to validate Sonar access, `operation=projects` to discover project keys, `operation=remote_report` for the latest Sonar coverage report, `operation=file_detail` for one file, `operation=local_report` to run local pytest coverage and predict whether the current branch is likely to clear the requested threshold before push, or `operation=local_quality_gate` for the same local analysis with an explicit quality-gate pass/fail view. Live `remote_report` responses now include `analysis_context`, `quality_gate`, and `decision_summary` so agents get a direct pass/fail or unknown answer inline, including pull-request scope when SonarQube exposes PR analysis metadata. In live mode, local Sonar operations run `coverage.py` in the workspace, then use SonarQube APIs to resolve the matching project and inspect the current remote quality gate definition and status. All Sonar operations, including `local_report` and `local_quality_gate`, follow `CHECKMARX_DSCAN_DATA_SOURCE`: mock mode returns bundled mock data, and live mode runs the real Sonar or local coverage workflow.
 
 Recommended response fields for agents:
 
@@ -218,7 +218,9 @@ Recommended minimum Sonar permissions for the token's backing account:
 - `Browse` on the target projects for project, branch, and measure access.
 - `See Source Code` on the target projects if you want source excerpts and best-effort line-level detail.
 
-If no token is configured, the Sonar tool will attempt anonymous access and clearly report that mode in the tool output. For `operation=local_report`, no Sonar base URL is required.
+If no token is configured, the Sonar tool will attempt anonymous access and clearly report that mode in the tool output. For `operation=local_report` and `operation=local_quality_gate`, no Sonar base URL is required.
+
+For `operation=remote_report`, `local_report`, and `local_quality_gate`, the MCP server runs real Sonar or local coverage analysis only when `CHECKMARX_DSCAN_DATA_SOURCE=live`. In that live path it uses SonarQube APIs such as project discovery, branch lookup, measures, file/component lookup, source lookup, and `api/qualitygates/project_status` to connect the current workspace to the remote Sonar project and quality gate. When a `pull_request` is provided, the server also attempts to resolve PR-specific analysis metadata if the SonarQube instance exposes that capability. In mock mode it returns the bundled Sonar payloads, consistent with the rest of the mock-only demo flow.
 
 ## Create a `.env` file
 
@@ -264,6 +266,7 @@ The mock Checkmarx findings intentionally point to these real files:
 - `demo/mock_providerportal_web/package.json`
 - `demo/mock_providerportal_web/package-lock.json`
 - `demo/mock_providerportal_web/Dockerfile`
+- `demo/mock_providerportal_web/src/server.js`
 
 Recommended demo flow:
 

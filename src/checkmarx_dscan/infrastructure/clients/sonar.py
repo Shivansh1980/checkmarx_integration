@@ -40,7 +40,18 @@ class SonarClient:
 			for key in ("errors", "error", "message"):
 				value = parsed.get(key)
 				if isinstance(value, list) and value:
-					return str(value[0])[:240]
+					first = value[0]
+					if isinstance(first, dict):
+						for nested_key in ("msg", "message", "error"):
+							nested_value = first.get(nested_key)
+							if nested_value:
+								return str(nested_value)[:240]
+					return str(first)[:240]
+				if isinstance(value, dict):
+					for nested_key in ("msg", "message", "error"):
+						nested_value = value.get(nested_key)
+						if nested_value:
+							return str(nested_value)[:240]
 				if value:
 					return str(value)[:240]
 		return decoded[:240]
@@ -201,6 +212,39 @@ class SonarClient:
 	) -> tuple[dict[str, Any], dict[str, Any]]:
 		return self._request_json("api/project_branches/list", params={"project": project}, auth_mode=auth_mode)
 
+	def list_project_pull_requests(
+		self,
+		project: str,
+		*,
+		auth_mode: str = "prefer_auth",
+	) -> tuple[dict[str, Any], dict[str, Any]]:
+		return self._request_json("api/project_pull_requests/list", params={"project": project}, auth_mode=auth_mode)
+
+	def get_quality_gate_status(
+		self,
+		*,
+		project_key: str = "",
+		project_id: str = "",
+		analysis_id: str = "",
+		branch: str = "",
+		pull_request: str = "",
+		auth_mode: str = "prefer_auth",
+	) -> tuple[dict[str, Any], dict[str, Any]]:
+		params: dict[str, Any] = {}
+		if analysis_id:
+			params["analysisId"] = analysis_id
+		elif project_id:
+			params["projectId"] = project_id
+		elif project_key:
+			params["projectKey"] = project_key
+		else:
+			raise SonarError("A Sonar projectKey, projectId, or analysisId is required for quality gate status.")
+		if branch:
+			params["branch"] = branch
+		if pull_request:
+			params["pullRequest"] = pull_request
+		return self._request_json("api/qualitygates/project_status", params=params, auth_mode=auth_mode)
+
 	def get_component_measures(
 		self,
 		component: str,
@@ -310,7 +354,7 @@ class SonarClient:
 		pull_request: str = "",
 		auth_mode: str = "prefer_auth",
 	) -> tuple[dict[str, Any], dict[str, Any]]:
-		params = {"key": component_key}
+		params = {"component": component_key}
 		if branch:
 			params["branch"] = branch
 		if pull_request:
@@ -397,6 +441,10 @@ class SonarClient:
 	def normalize_branches(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
 		branches = payload.get("branches") or []
 		return [item for item in branches if isinstance(item, dict)] if isinstance(branches, list) else []
+
+	def normalize_pull_requests(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+		pull_requests = payload.get("pullRequests") or []
+		return [item for item in pull_requests if isinstance(item, dict)] if isinstance(pull_requests, list) else []
 
 	def normalize_components(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
 		components = payload.get("components") or []

@@ -59,14 +59,16 @@ SONAR_TOOL_NAME = "sonar"
 SONAR_TOOL_DESCRIPTION = (
 	"Unified SonarQube and local coverage tool. Use operation=access_probe to validate server access, operation=projects to "
 	"discover project keys, operation=remote_report to fetch the latest SonarQube coverage for a project, operation=file_detail "
-	"to inspect one file, and operation=local_report to run pytest-based local coverage in the current workspace and predict "
-	"whether the code is likely to clear the requested Sonar coverage threshold before push."
+	"to inspect one file, and operation=local_report or local_quality_gate to run pytest-based local coverage in the current workspace "
+	"and predict whether the code is likely to clear the requested Sonar coverage threshold before push."
 )
 
 
 def _resolve_sonar_operation(operation: str) -> str:
 	resolved = str(operation or "remote_report").strip().lower().replace("-", "_")
-	allowed = {"access_probe", "projects", "remote_report", "file_detail", "local_report"}
+	if resolved == "quality_gate":
+		resolved = "local_quality_gate"
+	allowed = {"access_probe", "projects", "remote_report", "file_detail", "local_report", "local_quality_gate"}
 	if resolved not in allowed:
 		raise CheckmarxError(f"operation must be one of: {', '.join(sorted(allowed))}")
 	return resolved
@@ -223,7 +225,7 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 	data_source = resolve_data_source()
 	if data_source == "mock":
 		payload = load_mock_sonar_payload(
-			operation=operation,
+			operation="local_report" if operation == "local_quality_gate" else operation,
 			include_raw=kwargs.get("include_raw", False),
 			project=kwargs.get("project", ""),
 			branch=kwargs.get("branch", ""),
@@ -240,14 +242,21 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 				"remote_report": "sonar_coverage_report.json",
 				"file_detail": "sonar_file_coverage_detail.json",
 				"local_report": "sonar_local_coverage_report.json",
+				"local_quality_gate": "sonar_local_quality_gate_report.json",
 			}[operation]
+			if operation == "local_quality_gate":
+				payload["operation"] = "local_quality_gate"
+				payload["report_type"] = "local_quality_gate_prediction"
 			write_output_json(kwargs["output_json"], payload, default_file_name=default_file_name)
+		elif operation == "local_quality_gate":
+			payload["operation"] = "local_quality_gate"
+			payload["report_type"] = "local_quality_gate_prediction"
 		return payload
 	credentials = resolve_sonar_credentials(
 		base_url=kwargs.get("base_url", ""),
 		token=kwargs.get("token", ""),
 		timeout=kwargs.get("timeout"),
-		require_base_url=operation != "local_report",
+		require_base_url=operation not in {"local_report", "local_quality_gate"},
 	)
 	service = SonarCoverageService(credentials)
 	if operation == "access_probe":
@@ -276,9 +285,10 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			use_internal_fallbacks=kwargs.get("use_internal_fallbacks", False),
 			include_raw=kwargs.get("include_raw", False),
 		)
-	elif operation == "local_report":
+	elif operation in {"local_report", "local_quality_gate"}:
 		payload = service.local_coverage_report(
 			project=kwargs.get("project", ""),
+			project_query=kwargs.get("project_query", ""),
 			branch=kwargs.get("branch", ""),
 			pull_request=kwargs.get("pull_request", ""),
 			working_directory=kwargs.get("local_working_directory", ""),
@@ -290,6 +300,9 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			compare_with_remote=kwargs.get("compare_with_remote", False),
 			include_raw=kwargs.get("include_raw", False),
 		)
+		if operation == "local_quality_gate":
+			payload["operation"] = "local_quality_gate"
+			payload["report_type"] = "local_quality_gate_prediction"
 	else:
 		payload = service.coverage_report(
 			project=kwargs["project"],
@@ -306,6 +319,7 @@ def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 			"remote_report": "sonar_coverage_report.json",
 			"file_detail": "sonar_file_coverage_detail.json",
 			"local_report": "sonar_local_coverage_report.json",
+			"local_quality_gate": "sonar_local_quality_gate_report.json",
 		}[operation]
 		write_output_json(kwargs["output_json"], payload, default_file_name=default_file_name)
 	return payload

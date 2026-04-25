@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from ...domain.constants import SONAR_COVERAGE_METRIC_KEYS, SONAR_FILE_PAGE_SIZE, SONAR_PROJECTS_PAGE_SIZE
+from ...domain.constants import SONAR_COVERAGE_METRIC_KEYS, SONAR_FILE_PAGE_SIZE, SONAR_LOCALLY_EVALUABLE_QUALITY_GATE_METRICS, SONAR_PROJECTS_PAGE_SIZE
 from ...domain.errors import SonarError, SonarHttpError, SonarPermissionError
 from ...domain.models import SonarCredentials
 from ...infrastructure.clients.sonar import SonarClient
@@ -121,6 +121,13 @@ def _extract_source_map(source_payload: dict[str, Any]) -> dict[int, str]:
 	if not isinstance(sources, list):
 		return source_map
 	for item in sources:
+		if isinstance(item, (list, tuple)) and len(item) >= 2:
+			line = to_int(item[0], default=None)
+			code = item[1]
+			if line is None or code in (None, ""):
+				continue
+			source_map[int(line)] = str(code)
+			continue
 		if not isinstance(item, dict):
 			continue
 		line = to_int(item.get("line") or item.get("lineNumber"), default=None)
@@ -280,10 +287,529 @@ def _tail_output(text: str, *, line_limit: int = 40) -> str:
 	return "\n".join(lines[-line_limit:])
 
 
+def _build_quality_gate_prediction(
+	*,
+	threshold: float,
+	overall_coverage: float | None,
+	would_meet_threshold: bool,
+	files_below_threshold: list[dict[str, Any]],
+	mode: str,
+) -> dict[str, Any]:
+	failing_conditions: list[dict[str, Any]] = []
+	if overall_coverage is None:
+		failing_conditions.append(
+			{
+				"metric": "coverage",
+				"status": "unknown",
+				"actual": None,
+				"threshold": threshold,
+				"reason": "Overall local coverage could not be determined from the coverage.py output.",
+			}
+		)
+	elif not would_meet_threshold:
+		failing_conditions.append(
+			{
+				"metric": "coverage",
+				"status": "fail",
+				"actual": round(float(overall_coverage), 2),
+				"threshold": threshold,
+				"reason": f"Overall coverage {overall_coverage:.2f}% is below the configured local quality gate threshold of {threshold:.2f}%.",
+			}
+		)
+
+	return {
+		"mode": mode,
+		"evaluated_locally": True,
+		"status": "pass" if would_meet_threshold else "fail",
+		"would_pass": would_meet_threshold,
+		"coverage_threshold_pct": threshold,
+		"overall_coverage_pct": None if overall_coverage is None else round(float(overall_coverage), 2),
+		"failing_conditions": failing_conditions,
+		"files_below_threshold": [
+			{
+				"file_path": item.get("file_path"),
+				"file_name": _file_name_from_path(str(item.get("file_path") or "")),
+				"coverage_pct": item.get("coverage"),
+				"uncovered_lines_count": item.get("uncovered_lines"),
+				"uncovered_line_numbers": list(item.get("uncovered_line_numbers", [])),
+			}
+			for item in files_below_threshold[:25]
+		],
+		"limitations": [
+			"This is a local pre-push quality-gate prediction based on coverage.py results.",
+			"Final SonarQube pipeline results can still differ because of exclusions, imported report paths, or additional server-side gate conditions.",
+		],
+	}
+
+
+def _normalize_lookup_text(value: str) -> str:
+	return "".join(character.lower() for character in str(value or "") if character.isalnum())
+
+
+def _rank_project_match(project: dict[str, Any], query: str) -> tuple[int, str]:
+	query_text = str(query or "").strip()
+	if not query_text:
+		return (0, "none")
+	query_lower = query_text.lower()
+	query_normalized = _normalize_lookup_text(query_text)
+	project_key = str(project.get("key") or "").strip()
+	project_name = str(project.get("name") or "").strip()
+	key_lower = project_key.lower()
+	name_lower = project_name.lower()
+	key_normalized = _normalize_lookup_text(project_key)
+	name_normalized = _normalize_lookup_text(project_name)
+
+	if query_lower == key_lower:
+		return (100, "exact_key")
+	if query_lower == name_lower:
+		return (95, "exact_name")
+	if query_normalized and query_normalized == key_normalized:
+		return (90, "normalized_key")
+	if query_normalized and query_normalized == name_normalized:
+		return (85, "normalized_name")
+	if query_lower and query_lower in key_lower:
+		return (80, "key_contains")
+	if query_lower and query_lower in name_lower:
+		return (75, "name_contains")
+	if query_normalized and query_normalized in key_normalized:
+		return (70, "normalized_key_contains")
+	if query_normalized and query_normalized in name_normalized:
+		return (65, "normalized_name_contains")
+	return (0, "none")
+
+
+def _evaluate_quality_gate_condition(*, comparator: str, actual: float, threshold: float) -> bool | None:
+	resolved = str(comparator or "").strip().upper()
+	if resolved == "LT":
+		return actual >= threshold
+	if resolved == "GT":
+		return actual <= threshold
+	if resolved == "EQ":
+		return actual == threshold
+	return None
+
+
+def _local_metric_for_quality_gate(
+	*,
+	metric_key: str,
+	overall_coverage: float | None,
+	line_coverage: float | None,
+	branch_coverage: float | None,
+) -> float | None:
+	resolved = str(metric_key or "").strip()
+	if resolved == "coverage":
+		return overall_coverage
+	if resolved == "line_coverage":
+		return line_coverage
+	if resolved == "branch_coverage":
+		return branch_coverage
+	return None
+
+
+def _quality_gate_status_to_decision(status: str) -> tuple[str, bool | None]:
+	resolved = str(status or "").strip().upper()
+	if resolved == "OK":
+		return ("pass", True)
+	if resolved in {"ERROR", "WARN"}:
+		return ("fail", False)
+	return ("unknown", None)
+
+
+def _format_remote_scope(project_key: str, *, branch: str = "", pull_request: str = "") -> str:
+	if pull_request:
+		return f"project '{project_key}' pull request '{pull_request}'"
+	if branch:
+		return f"project '{project_key}' branch '{branch}'"
+	return f"project '{project_key}'"
+
+
 class SonarCoverageService:
 	def __init__(self, credentials: SonarCredentials) -> None:
 		self.credentials = credentials
 		self.client = SonarClient(base_url=credentials.base_url, token=credentials.token, timeout=credentials.timeout)
+
+	def _resolve_remote_project_for_workspace(
+		self,
+		*,
+		explicit_project: str,
+		project_query: str,
+		workspace_root: Path,
+		branch: str,
+		pull_request: str,
+	) -> dict[str, Any]:
+		lookup_terms: list[str] = []
+		for candidate in (explicit_project, project_query, workspace_root.name):
+			cleaned = str(candidate or "").strip()
+			if cleaned and cleaned not in lookup_terms:
+				lookup_terms.append(cleaned)
+
+		attempts: list[dict[str, Any]] = []
+		if explicit_project.strip():
+			try:
+				payload, _ = self.client.get_component_measures(explicit_project.strip(), branch=branch, pull_request=pull_request)
+				component = payload.get("component") if isinstance(payload.get("component"), dict) else {}
+				return {
+					"lookup_attempted": True,
+					"matched": True,
+					"query_used": explicit_project.strip(),
+					"match_strategy": "explicit_project_key",
+					"project_key": str(component.get("key") or explicit_project.strip()),
+					"project_name": str(component.get("name") or explicit_project.strip()),
+					"branch_name": branch or str(component.get("branch") or ""),
+					"attempts": attempts,
+				}
+			except SonarHttpError as exc:
+				attempts.append({"query": explicit_project.strip(), "strategy": "explicit_project_key", "error": str(exc)})
+
+		for lookup_term in lookup_terms:
+			try:
+				payload, _ = self.client.list_projects(query=lookup_term, page=1, page_size=25)
+			except SonarHttpError as exc:
+				attempts.append({"query": lookup_term, "strategy": "search", "error": str(exc)})
+				continue
+
+			projects = self.client.normalize_project_list(payload)
+			best_project: dict[str, Any] | None = None
+			best_score = -1
+			best_strategy = "none"
+			for candidate in projects:
+				score, strategy = _rank_project_match(candidate, lookup_term)
+				if score > best_score:
+					best_score = score
+					best_strategy = strategy
+					best_project = candidate
+
+			attempts.append(
+				{
+					"query": lookup_term,
+					"strategy": "search",
+					"candidate_count": len(projects),
+					"best_score": None if best_score < 0 else best_score,
+					"best_match_strategy": best_strategy,
+				}
+			)
+			if best_project is not None and best_score >= 65:
+				return {
+					"lookup_attempted": True,
+					"matched": True,
+					"query_used": lookup_term,
+					"match_strategy": best_strategy,
+					"project_key": str(best_project.get("key") or lookup_term),
+					"project_name": str(best_project.get("name") or best_project.get("key") or lookup_term),
+					"branch_name": branch or "",
+					"attempts": attempts,
+				}
+
+		return {
+			"lookup_attempted": bool(lookup_terms),
+			"matched": False,
+			"query_used": lookup_terms[0] if lookup_terms else "",
+			"match_strategy": "not_found",
+			"project_key": "",
+			"project_name": "",
+			"branch_name": branch or "",
+			"attempts": attempts,
+		}
+
+	def _predict_remote_quality_gate(
+		self,
+		*,
+		project_key: str,
+		branch: str,
+		pull_request: str,
+		overall_coverage: float | None,
+		line_coverage: float | None,
+		branch_coverage: float | None,
+	) -> dict[str, Any]:
+		payload, _ = self.client.get_quality_gate_status(project_key=project_key, branch=branch, pull_request=pull_request)
+		project_status = payload.get("projectStatus") if isinstance(payload.get("projectStatus"), dict) else {}
+		conditions = project_status.get("conditions") if isinstance(project_status.get("conditions"), list) else []
+
+		evaluated_conditions: list[dict[str, Any]] = []
+		unsupported_conditions: list[dict[str, Any]] = []
+		for raw_condition in conditions:
+			if not isinstance(raw_condition, dict):
+				continue
+			metric_key = str(raw_condition.get("metricKey") or "").strip()
+			comparator = str(raw_condition.get("comparator") or "").strip().upper()
+			threshold = _safe_float(raw_condition.get("errorThreshold"))
+			local_actual = _local_metric_for_quality_gate(
+				metric_key=metric_key,
+				overall_coverage=overall_coverage,
+				line_coverage=line_coverage,
+				branch_coverage=branch_coverage,
+			)
+			if metric_key not in SONAR_LOCALLY_EVALUABLE_QUALITY_GATE_METRICS or threshold is None or local_actual is None:
+				unsupported_conditions.append(
+					compact_dict(
+						{
+							"metric": metric_key,
+							"comparator": comparator,
+							"threshold": threshold,
+							"remote_status": raw_condition.get("status"),
+							"reason": "Condition cannot be evaluated locally from coverage.py metrics.",
+						}
+					)
+				)
+				continue
+
+			passes = _evaluate_quality_gate_condition(comparator=comparator, actual=local_actual, threshold=threshold)
+			status = "pass" if passes else "fail"
+			if passes is None:
+				unsupported_conditions.append(
+					compact_dict(
+						{
+							"metric": metric_key,
+							"comparator": comparator,
+							"threshold": threshold,
+							"reason": "Comparator is not supported by the local predictor.",
+						}
+					)
+				)
+				continue
+
+			evaluated_conditions.append(
+				compact_dict(
+					{
+						"metric": metric_key,
+						"comparator": comparator,
+						"threshold": threshold,
+						"local_actual": round(float(local_actual), 2),
+						"remote_actual": _safe_float(raw_condition.get("actualValue")),
+						"remote_status": raw_condition.get("status"),
+						"status": status,
+					}
+				)
+			)
+
+		failed_conditions = [item for item in evaluated_conditions if item.get("status") == "fail"]
+		prediction_status = "unknown"
+		prediction_would_pass: bool | None = None
+		if failed_conditions:
+			prediction_status = "fail"
+			prediction_would_pass = False
+		elif evaluated_conditions and not unsupported_conditions:
+			prediction_status = "pass"
+			prediction_would_pass = True
+
+		return {
+			"project_key": project_key,
+			"current_status": str(project_status.get("status") or "NONE"),
+			"ignored_conditions": bool(project_status.get("ignoredConditions", False)),
+			"cayc_status": project_status.get("caycStatus"),
+			"period": project_status.get("period"),
+			"prediction_status": prediction_status,
+			"would_pass": prediction_would_pass,
+			"evaluated_conditions": evaluated_conditions,
+			"unsupported_conditions": unsupported_conditions,
+			"notes": [
+				"This prediction evaluates only SonarQube quality gate conditions that can be derived from local coverage.py metrics.",
+				"Unsupported gate conditions still require a real Sonar analysis to determine the final gate result.",
+			],
+		}
+
+	def _resolve_remote_analysis_context(
+		self,
+		*,
+		project: str,
+		branch: str,
+		pull_request: str,
+	) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+		metas: list[dict[str, Any]] = []
+		context: dict[str, Any] = {
+			"scope_type": "pull_request" if pull_request else ("branch" if branch else "project"),
+			"requested_scope": {
+				"project_key": project,
+				"branch": branch or "",
+				"pull_request": pull_request or "",
+			},
+			"resolved_scope": {
+				"project_key": project,
+				"branch": branch or "",
+				"pull_request": pull_request or "",
+				"analysis_date": "",
+				"quality_gate_status": "",
+			},
+			"notes": [],
+		}
+
+		if pull_request:
+			pull_request_context: dict[str, Any] = {
+				"lookup_attempted": True,
+				"lookup_supported": None,
+				"requested": pull_request,
+				"matched": False,
+			}
+			if not hasattr(self.client, "list_project_pull_requests"):
+				pull_request_context["lookup_supported"] = False
+				pull_request_context["lookup_error"] = "The configured Sonar client does not expose pull request discovery."
+				context["notes"].append("Pull request discovery is unavailable in the current Sonar client configuration.")
+				context["pull_request"] = pull_request_context
+				return context, metas
+
+			try:
+				payload, meta = self.client.list_project_pull_requests(project)
+				metas.append(meta)
+				pull_requests = self.client.normalize_pull_requests(payload) if hasattr(self.client, "normalize_pull_requests") else []
+				pull_request_context["lookup_supported"] = True
+				pull_request_context["available_count"] = len(pull_requests)
+				matched = next(
+					(
+						item
+						for item in pull_requests
+						if str(item.get("key") or "").strip() == pull_request.strip()
+					),
+					None,
+				)
+				if matched is not None:
+					status = matched.get("status") if isinstance(matched.get("status"), dict) else {}
+					pull_request_context.update(
+						{
+							"matched": True,
+							"title": matched.get("title"),
+							"branch": matched.get("branch"),
+							"base": matched.get("base"),
+							"analysis_date": matched.get("analysisDate"),
+							"quality_gate_status": status.get("qualityGateStatus"),
+						}
+					)
+					context["resolved_scope"].update(
+						{
+							"branch": str(matched.get("branch") or branch or ""),
+							"pull_request": pull_request,
+							"analysis_date": str(matched.get("analysisDate") or ""),
+							"quality_gate_status": str(status.get("qualityGateStatus") or ""),
+						}
+					)
+				else:
+					context["notes"].append(
+						f"No Sonar pull request analysis metadata was found for pull request '{pull_request}'."
+					)
+			except SonarHttpError as exc:
+				pull_request_context["lookup_supported"] = False if exc.status_code == 404 else None
+				pull_request_context["lookup_error"] = str(exc)
+				if exc.status_code == 404:
+					context["notes"].append(
+						"This SonarQube server does not expose pull request listing for the requested project or edition."
+					)
+				else:
+					context["notes"].append(f"Pull request discovery failed: {exc}")
+			context["pull_request"] = pull_request_context
+			return context, metas
+
+		branch_context: dict[str, Any] = {
+			"lookup_attempted": False,
+			"requested": branch or "",
+			"matched": False,
+		}
+		if not hasattr(self.client, "list_project_branches"):
+			context["branch"] = branch_context
+			return context, metas
+
+		try:
+			payload, meta = self.client.list_project_branches(project)
+			metas.append(meta)
+			branch_context["lookup_attempted"] = True
+			branches = self.client.normalize_branches(payload) if hasattr(self.client, "normalize_branches") else []
+			matched_branch: dict[str, Any] | None = None
+			if branch.strip():
+				matched_branch = next(
+					(
+						item
+						for item in branches
+						if str(item.get("name") or "").strip().lower() == branch.strip().lower()
+					),
+					None,
+				)
+			else:
+				matched_branch = next((item for item in branches if bool(item.get("isMain"))), None)
+
+			if matched_branch is not None:
+				status = matched_branch.get("status") if isinstance(matched_branch.get("status"), dict) else {}
+				resolved_branch = str(matched_branch.get("name") or branch or "")
+				branch_context.update(
+					{
+						"matched": True,
+						"resolved": resolved_branch,
+						"is_main": bool(matched_branch.get("isMain")),
+						"analysis_date": matched_branch.get("analysisDate"),
+						"quality_gate_status": status.get("qualityGateStatus"),
+					}
+				)
+				context["resolved_scope"].update(
+					{
+						"branch": resolved_branch,
+						"analysis_date": str(matched_branch.get("analysisDate") or ""),
+						"quality_gate_status": str(status.get("qualityGateStatus") or ""),
+					}
+				)
+			elif branch.strip():
+				context["notes"].append(f"Branch '{branch}' was not returned by SonarQube for project '{project}'.")
+		except SonarHttpError as exc:
+			branch_context["lookup_attempted"] = True
+			branch_context["lookup_error"] = str(exc)
+			context["notes"].append(f"Branch discovery failed: {exc}")
+
+		context["branch"] = branch_context
+		return context, metas
+
+	def _build_remote_quality_gate_summary(
+		self,
+		*,
+		project_key: str,
+		branch: str,
+		pull_request: str,
+		overall_coverage: float | None,
+		coverage_threshold: float,
+		analysis_context: dict[str, Any],
+	) -> tuple[dict[str, Any], dict[str, Any]]:
+		payload, meta = self.client.get_quality_gate_status(project_key=project_key, branch=branch, pull_request=pull_request)
+		project_status = payload.get("projectStatus") if isinstance(payload.get("projectStatus"), dict) else {}
+		conditions_payload = project_status.get("conditions") if isinstance(project_status.get("conditions"), list) else []
+		conditions: list[dict[str, Any]] = []
+		failing_conditions: list[dict[str, Any]] = []
+		for raw_condition in conditions_payload:
+			if not isinstance(raw_condition, dict):
+				continue
+			condition = compact_dict(
+				{
+					"metric": raw_condition.get("metricKey"),
+					"status": raw_condition.get("status"),
+					"comparator": raw_condition.get("comparator"),
+					"threshold": _safe_float(raw_condition.get("errorThreshold")),
+					"actual": _safe_float(raw_condition.get("actualValue")),
+					"period_index": _safe_int(raw_condition.get("periodIndex"), default=0) or None,
+				}
+			)
+			conditions.append(condition)
+			if str(raw_condition.get("status") or "").strip().upper() not in {"", "OK"}:
+				failing_conditions.append(condition)
+
+		current_status = str(project_status.get("status") or "NONE").upper()
+		decision_status, would_pass = _quality_gate_status_to_decision(current_status)
+		meets_requested_threshold = None if overall_coverage is None else round(float(overall_coverage), 2) >= round(float(coverage_threshold), 2)
+		resolved_scope = analysis_context.get("resolved_scope") if isinstance(analysis_context.get("resolved_scope"), dict) else {}
+		quality_gate = {
+			"source": "sonar_remote_analysis",
+			"evaluated_remotely": True,
+			"scope_type": analysis_context.get("scope_type"),
+			"status": decision_status,
+			"current_status": current_status,
+			"would_pass": would_pass,
+			"coverage_threshold_pct": float(coverage_threshold),
+			"overall_coverage_pct": None if overall_coverage is None else round(float(overall_coverage), 2),
+			"meets_requested_coverage_threshold": meets_requested_threshold,
+			"project_key": project_key,
+			"resolved_branch": resolved_scope.get("branch") or branch or "",
+			"resolved_pull_request": resolved_scope.get("pull_request") or pull_request or "",
+			"analysis_date": resolved_scope.get("analysis_date") or "",
+			"ignored_conditions": bool(project_status.get("ignoredConditions", False)),
+			"cayc_status": project_status.get("caycStatus"),
+			"period": project_status.get("period"),
+			"conditions": conditions,
+			"failing_conditions": failing_conditions,
+		}
+		return quality_gate, meta
 
 	def _run_local_command(
 		self,
@@ -469,10 +995,21 @@ class SonarCoverageService:
 		permission_gaps: set[str] = set()
 		metas: list[dict[str, Any]] = []
 
-		project_payload, project_meta = self.client.get_component_measures(project, branch=branch, pull_request=pull_request)
+		try:
+			project_payload, project_meta = self.client.get_component_measures(project, branch=branch, pull_request=pull_request)
+		except SonarHttpError as exc:
+			if pull_request and exc.status_code == 404:
+				raise SonarError(
+					f"Sonar project '{project}' does not have a coverage report for pull request '{pull_request}'."
+				) from exc
+			if branch and exc.status_code == 404:
+				raise SonarError(f"Sonar project '{project}' does not have a coverage report for branch '{branch}'.") from exc
+			raise
 		metas.append(project_meta)
 		project_component = project_payload.get("component") if isinstance(project_payload.get("component"), dict) else {}
 		project_measures = self.client.parse_measures(project_component)
+		analysis_context, analysis_metas = self._resolve_remote_analysis_context(project=project, branch=branch, pull_request=pull_request)
+		metas.extend(analysis_metas)
 
 		file_components: list[dict[str, Any]] = []
 		page = 1
@@ -569,10 +1106,45 @@ class SonarCoverageService:
 		total_lines_considered = _safe_int(project_measures.get("lines_to_cover"))
 		total_covered_lines = max(0, total_lines_considered - total_uncovered)
 		files_with_uncovered_lines = [item for item in files if _safe_int(item.get("uncovered_lines")) > 0]
+		quality_gate: dict[str, Any] | None = None
+		quality_gate_error = ""
+		try:
+			quality_gate, quality_gate_meta = self._build_remote_quality_gate_summary(
+				project_key=str(project_component.get("key") or project),
+				branch=branch,
+				pull_request=pull_request,
+				overall_coverage=_safe_float(project_measures.get("coverage")),
+				coverage_threshold=float(coverage_threshold),
+				analysis_context=analysis_context,
+			)
+			metas.append(quality_gate_meta)
+		except SonarHttpError as exc:
+			quality_gate_error = str(exc)
+			quality_gate = {
+				"source": "sonar_remote_analysis",
+				"evaluated_remotely": False,
+				"scope_type": analysis_context.get("scope_type"),
+				"status": "unknown",
+				"current_status": "UNAVAILABLE",
+				"would_pass": None,
+				"coverage_threshold_pct": float(coverage_threshold),
+				"overall_coverage_pct": _safe_float(project_measures.get("coverage")),
+				"meets_requested_coverage_threshold": (
+					None
+					if _safe_float(project_measures.get("coverage")) is None
+					else _safe_float(project_measures.get("coverage")) >= float(coverage_threshold)
+				),
+				"project_key": str(project_component.get("key") or project),
+				"resolved_branch": str((analysis_context.get("resolved_scope") or {}).get("branch") or branch or ""),
+				"resolved_pull_request": str((analysis_context.get("resolved_scope") or {}).get("pull_request") or pull_request or ""),
+				"conditions": [],
+				"failing_conditions": [],
+				"error": quality_gate_error,
+			}
 		project_summary = {
 			"project_key": project_component.get("key") or project,
 			"project_name": project_component.get("name") or project,
-			"branch_name": branch or project_component.get("branch") or "main",
+			"branch_name": str((analysis_context.get("resolved_scope") or {}).get("branch") or branch or project_component.get("branch") or "main"),
 			"pull_request": pull_request or "",
 			"overall_coverage_pct": _safe_float(project_measures.get("coverage")),
 			"line_coverage_pct": _safe_float(project_measures.get("line_coverage")),
@@ -584,6 +1156,36 @@ class SonarCoverageService:
 			"total_files_with_uncovered_lines": len(files_with_uncovered_lines),
 			"total_files_with_executable_coverage": len([item for item in files if item["has_executable_coverage_metrics"]]),
 		}
+		meets_requested_threshold = None
+		if project_summary["overall_coverage_pct"] is not None:
+			meets_requested_threshold = float(project_summary["overall_coverage_pct"]) >= float(coverage_threshold)
+		decision_status = "unknown"
+		decision_source = "none"
+		would_pass_quality_gate: bool | None = None
+		message = "SonarQube did not return enough information to determine a coverage decision."
+		if quality_gate is not None and quality_gate.get("evaluated_remotely"):
+			decision_status = str(quality_gate.get("status") or "unknown")
+			decision_source = "sonar_quality_gate"
+			would_pass_quality_gate = quality_gate.get("would_pass") if isinstance(quality_gate.get("would_pass"), bool) or quality_gate.get("would_pass") is None else None
+			if decision_status == "pass":
+				message = (
+					f"SonarQube quality gate is passing for {_format_remote_scope(str(project_summary['project_key']), branch=branch, pull_request=pull_request)}."
+				)
+			elif decision_status == "fail":
+				message = (
+					f"SonarQube quality gate is failing for {_format_remote_scope(str(project_summary['project_key']), branch=branch, pull_request=pull_request)}."
+				)
+			else:
+				message = (
+					f"SonarQube did not report a definitive quality gate result for {_format_remote_scope(str(project_summary['project_key']), branch=branch, pull_request=pull_request)}."
+				)
+		elif meets_requested_threshold is not None:
+			decision_status = "pass" if meets_requested_threshold else "fail"
+			decision_source = "requested_coverage_threshold"
+			message = (
+				f"Remote Sonar coverage is {project_summary['overall_coverage_pct']:.2f}% and "
+				f"{'meets' if meets_requested_threshold else 'does not meet'} the requested threshold of {float(coverage_threshold):.2f}%."
+			)
 
 		payload = {
 			"ok": True,
@@ -591,10 +1193,29 @@ class SonarCoverageService:
 			"report_type": "coverage_improvement",
 			"generated_at": utc_now_iso(),
 			"access_mode": _access_mode(validation, metas, permission_gaps),
+			"authentication": self.client.build_auth_section(validation, metas),
 			"project_summary": project_summary,
+			"analysis_context": analysis_context,
+			"quality_gate": quality_gate,
+			"decision_summary": {
+				"status": decision_status,
+				"source": decision_source,
+				"scope_type": analysis_context.get("scope_type"),
+				"project_key": project_summary["project_key"],
+				"branch_name": project_summary["branch_name"],
+				"pull_request": project_summary["pull_request"],
+				"quality_gate_status": None if quality_gate is None else quality_gate.get("current_status"),
+				"would_pass_quality_gate": would_pass_quality_gate,
+				"requested_coverage_threshold_pct": float(coverage_threshold),
+				"overall_coverage_pct": project_summary["overall_coverage_pct"],
+				"meets_requested_coverage_threshold": meets_requested_threshold,
+				"message": message,
+			},
 			"files": [_normalize_file_record(item) for item in top_files],
 			"priority": _build_priority_section(top_files, limit=min(10, len(top_files))),
 		}
+		if quality_gate_error:
+			payload["quality_gate_error"] = quality_gate_error
 		if include_raw:
 			payload["raw"] = {
 				"project_measures": project_payload,
@@ -606,6 +1227,7 @@ class SonarCoverageService:
 		self,
 		*,
 		project: str = "",
+		project_query: str = "",
 		branch: str = "",
 		pull_request: str = "",
 		working_directory: str = "",
@@ -686,8 +1308,11 @@ class SonarCoverageService:
 		total_uncovered_lines = _safe_int(totals.get("missing_lines"))
 		total_covered_lines = max(0, total_lines_considered - total_uncovered_lines)
 		overall_coverage = _safe_float(totals.get("percent_covered"))
+		line_coverage = round((100.0 * total_covered_lines / total_lines_considered), 2) if total_lines_considered > 0 else None
 		if overall_coverage is None:
 			overall_coverage = _safe_float(totals.get("percent_covered_display"))
+		total_branches = 0
+		total_covered_branches = 0
 
 		files: list[dict[str, Any]] = []
 		coverage_files = coverage_payload.get("files") if isinstance(coverage_payload.get("files"), dict) else {}
@@ -704,6 +1329,8 @@ class SonarCoverageService:
 			uncovered_lines = _safe_int(summary.get("missing_lines"), default=len(missing_line_numbers))
 			covered_lines = _safe_int(summary.get("covered_lines"), default=max(0, lines_to_cover - uncovered_lines))
 			branch_coverage = _safe_branch_coverage(summary)
+			total_branches += _safe_int(summary.get("num_branches"))
+			total_covered_branches += _safe_int(summary.get("covered_branches"))
 			entry = {
 				"file_key": file_path,
 				"file_path": str(file_path).replace("\\", "/"),
@@ -756,6 +1383,39 @@ class SonarCoverageService:
 		]
 		would_meet_threshold = overall_coverage is not None and overall_coverage >= threshold
 		project_name = project.strip() or workspace_root.name
+		overall_branch_coverage = round((100.0 * total_covered_branches / total_branches), 2) if total_branches > 0 else None
+		sonar_project = {
+			"lookup_attempted": False,
+			"matched": False,
+			"query_used": "",
+			"match_strategy": "not_attempted",
+			"project_key": project.strip() or "",
+			"project_name": project_name,
+			"branch_name": branch or "",
+			"attempts": [],
+		}
+		sonar_quality_gate: dict[str, Any] | None = None
+		sonar_quality_gate_error = ""
+		if self.credentials.base_url:
+			sonar_project = self._resolve_remote_project_for_workspace(
+				explicit_project=project,
+				project_query=project_query,
+				workspace_root=workspace_root,
+				branch=branch,
+				pull_request=pull_request,
+			)
+			if sonar_project.get("matched") and sonar_project.get("project_key"):
+				try:
+					sonar_quality_gate = self._predict_remote_quality_gate(
+						project_key=str(sonar_project.get("project_key") or ""),
+						branch=branch,
+						pull_request=pull_request,
+						overall_coverage=overall_coverage,
+						line_coverage=line_coverage,
+						branch_coverage=overall_branch_coverage,
+					)
+				except SonarError as exc:
+					sonar_quality_gate_error = str(exc)
 
 		payload = {
 			"ok": True,
@@ -764,13 +1424,13 @@ class SonarCoverageService:
 			"report_type": "local_coverage_prediction",
 			"generated_at": utc_now_iso(),
 			"project_summary": {
-				"project_key": project.strip() or "local-workspace",
+				"project_key": project.strip() or str(sonar_project.get("project_key") or "local-workspace"),
 				"project_name": project_name,
 				"branch_name": branch or "local",
 				"pull_request": pull_request or "",
 				"overall_coverage_pct": overall_coverage,
-				"line_coverage_pct": overall_coverage,
-				"branch_coverage_pct": None,
+				"line_coverage_pct": line_coverage,
+				"branch_coverage_pct": overall_branch_coverage,
 				"total_lines_considered": total_lines_considered,
 				"total_covered_lines": total_covered_lines,
 				"total_uncovered_lines": total_uncovered_lines,
@@ -785,14 +1445,28 @@ class SonarCoverageService:
 			"workspace_root": str(workspace_root),
 			"test_command": " ".join(coverage_run_command),
 			"source_paths": resolved_source_paths,
+			"quality_gate": _build_quality_gate_prediction(
+				threshold=threshold,
+				overall_coverage=overall_coverage,
+				would_meet_threshold=would_meet_threshold,
+				files_below_threshold=files_below_threshold,
+				mode="sonar_quality_gate_prediction" if sonar_quality_gate is not None else "threshold_prediction",
+			),
+			"sonar_project": sonar_project,
 			"files": [_normalize_file_record(item) for item in top_files],
 			"priority": _build_priority_section(top_files, limit=min(10, len(top_files))),
 		}
+		if sonar_quality_gate is not None:
+			payload["sonar_quality_gate"] = sonar_quality_gate
+			payload["quality_gate"]["sonar_prediction_status"] = sonar_quality_gate.get("prediction_status")
+			payload["quality_gate"]["sonar_prediction_would_pass"] = sonar_quality_gate.get("would_pass")
+		if sonar_quality_gate_error:
+			payload["sonar_quality_gate_error"] = sonar_quality_gate_error
 
-		if compare_with_remote and project.strip() and self.credentials.base_url:
+		if compare_with_remote and sonar_project.get("matched") and sonar_project.get("project_key") and self.credentials.base_url:
 			try:
 				remote_payload = self.coverage_report(
-					project=project,
+					project=str(sonar_project.get("project_key") or project),
 					branch=branch,
 					pull_request=pull_request,
 					file_limit=min(10, file_limit),

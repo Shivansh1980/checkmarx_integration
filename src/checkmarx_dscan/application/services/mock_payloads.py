@@ -12,6 +12,7 @@ _MOCK_DEMO_PROJECT_ROOT = "demo/mock_providerportal_web"
 _MOCK_DEMO_PACKAGE_JSON = f"{_MOCK_DEMO_PROJECT_ROOT}/package.json"
 _MOCK_DEMO_PACKAGE_LOCK = f"{_MOCK_DEMO_PROJECT_ROOT}/package-lock.json"
 _MOCK_DEMO_DOCKERFILE = f"{_MOCK_DEMO_PROJECT_ROOT}/Dockerfile"
+_MOCK_DEMO_SERVER = f"{_MOCK_DEMO_PROJECT_ROOT}/src/server.js"
 _MOCK_DEMO_RESET_COMMAND = "python tools/mock_demo_project.py reset"
 _MOCK_DEMO_INJECT_COMMAND = "python tools/mock_demo_project.py inject"
 
@@ -38,6 +39,43 @@ _CHECKMARX_FINDINGS = [
     },
     {
         "index": 2,
+        "id": "CVE-2026-10002",
+        "type": "sca",
+        "severity": "high",
+        "state": "TO_VERIFY",
+        "title": "lodash",
+        "description": "Mock dependency vulnerability retained for demo workflows.",
+        "location": {
+            "filename": _MOCK_DEMO_PACKAGE_JSON,
+            "display": f"{_MOCK_DEMO_PACKAGE_JSON}:13",
+            "line": 13,
+        },
+        "package_name": "lodash",
+        "package_version": "4.17.15",
+        "recommended_version": "4.17.21",
+        "fix_recommendation": "Upgrade lodash to 4.17.21 or newer in package.json and regenerate package-lock.json.",
+        "references": ["https://example.test/advisories/CVE-2026-10002"],
+    },
+    {
+        "index": 3,
+        "id": "SAST-2026-0420",
+        "type": "sast",
+        "severity": "high",
+        "state": "TO_VERIFY",
+        "title": "OS Command Injection",
+        "description": "Mock source-code vulnerability retained for demo workflows.",
+        "location": {
+            "filename": _MOCK_DEMO_SERVER,
+            "display": f"{_MOCK_DEMO_SERVER}:15",
+            "line": 15,
+        },
+        "category": "Command Injection",
+        "language": "JavaScript",
+        "fix_recommendation": "Remove direct shell execution from the route and replace it with a fixed allowlist-backed diagnostic action.",
+        "references": ["https://example.test/queries/os-command-injection"],
+    },
+    {
+        "index": 4,
         "id": "KICS-2026-0009",
         "type": "kics",
         "severity": "medium",
@@ -60,7 +98,7 @@ def _mock_demo_project_details() -> dict[str, Any]:
     return {
         "name": "mock_providerportal_web",
         "root": _MOCK_DEMO_PROJECT_ROOT,
-        "managed_files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK, _MOCK_DEMO_DOCKERFILE],
+        "managed_files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK, _MOCK_DEMO_DOCKERFILE, _MOCK_DEMO_SERVER],
         "reset_command": _MOCK_DEMO_RESET_COMMAND,
         "inject_command": _MOCK_DEMO_INJECT_COMMAND,
         "notes": [
@@ -77,20 +115,20 @@ def _checkmarx_agent_report() -> dict[str, Any]:
         "scan_id": "demo-scan-id",
         "branch_name": "release_1",
         "status": "Completed",
-        "status_details": "general Completed; sca Completed; kics Completed",
-        "engines_enabled": ["sca", "kics"],
+        "status_details": "general Completed; sca Completed; sast Completed; kics Completed",
+        "engines_enabled": ["sca", "sast", "kics"],
         "detail_source": "mock_report",
         "detailed_findings_available": True,
         "vulnerability_summary": {
-            "total_findings": 2,
+            "total_findings": 4,
             "highest_severity": "critical",
-            "severity_counts": {"critical": 1, "medium": 1},
-            "engine_counts": {"sca": 1, "kics": 1},
+            "severity_counts": {"critical": 1, "high": 2, "medium": 1},
+            "engine_counts": {"sca": 2, "sast": 1, "kics": 1},
             "terminal_status": "Completed",
         },
         "engine_coverage": {
-            "engines_enabled": ["sca", "kics"],
-            "engines_with_findings": ["sca", "kics"],
+            "engines_enabled": ["sca", "sast", "kics"],
+            "engines_with_findings": ["sca", "sast", "kics"],
             "engines_without_findings": [],
         },
         "top_actionable_issues": [
@@ -104,6 +142,25 @@ def _checkmarx_agent_report() -> dict[str, Any]:
                 "location": f"{_MOCK_DEMO_PACKAGE_JSON}:12",
                 "vulnerability_count": 1,
                 "fix_recommendation": "Upgrade axios to 1.12.2 or newer in package.json and regenerate package-lock.json.",
+            },
+            {
+                "type": "sca",
+                "severity": "high",
+                "title": "lodash 4.17.15",
+                "package_name": "lodash",
+                "package_version": "4.17.15",
+                "recommended_version": "4.17.21",
+                "location": f"{_MOCK_DEMO_PACKAGE_JSON}:13",
+                "vulnerability_count": 1,
+                "fix_recommendation": "Upgrade lodash to 4.17.21 or newer in package.json and regenerate package-lock.json.",
+            },
+            {
+                "type": "sast",
+                "severity": "high",
+                "title": "OS Command Injection",
+                "location": f"{_MOCK_DEMO_SERVER}:15",
+                "vulnerability_count": 1,
+                "fix_recommendation": "Remove direct shell execution from the route and replace it with a fixed allowlist-backed diagnostic action.",
             }
         ],
         "top_fix_targets": [
@@ -114,10 +171,32 @@ def _checkmarx_agent_report() -> dict[str, Any]:
                 "recommended_version": "1.12.2",
                 "reason": "Clears the highest-severity dependency issue in the demo project.",
                 "files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK],
+            },
+            {
+                "type": "package",
+                "target": "lodash",
+                "current_version": "4.17.15",
+                "recommended_version": "4.17.21",
+                "reason": "Clears the additional dependency issue in the demo project.",
+                "files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK],
+            },
+            {
+                "type": "code",
+                "target": "/admin/run diagnostics route",
+                "reason": "Removes the mock source-code command injection path in the demo app.",
+                "files": [_MOCK_DEMO_SERVER],
+            },
+            {
+                "type": "container",
+                "target": "runtime user",
+                "reason": "Prevents the container from running as root in the demo image.",
+                "files": [_MOCK_DEMO_DOCKERFILE],
             }
         ],
         "dependency_issues": [_CHECKMARX_FINDINGS[0]],
-        "infrastructure_issues": [_CHECKMARX_FINDINGS[1]],
+        "dependency_issues": [_CHECKMARX_FINDINGS[0], _CHECKMARX_FINDINGS[1]],
+        "code_issues": [_CHECKMARX_FINDINGS[2]],
+        "infrastructure_issues": [_CHECKMARX_FINDINGS[3]],
         "vulnerabilities": deepcopy(_CHECKMARX_FINDINGS),
     }
 
@@ -142,19 +221,19 @@ def _build_checkmarx_report_payload(*, include_archive: bool) -> dict[str, Any]:
             "id": "demo-scan-id",
             "branch": "release_1",
             "status": "Completed",
-            "status_details": "general Completed; sca Completed; kics Completed",
-            "engines": ["sca", "kics"],
-            "total_results": 2,
+            "status_details": "general Completed; sca Completed; sast Completed; kics Completed",
+            "engines": ["sca", "sast", "kics"],
+            "total_results": 4,
             "created_at": "2026-04-10T09:30:00Z",
             "completed_at": "2026-04-10T09:34:00Z",
         },
         "summary": {
-            "total_findings": 2,
+            "total_findings": 4,
             "terminal_status": "Completed",
-            "status_details": "general Completed; sca Completed; kics Completed",
+            "status_details": "general Completed; sca Completed; sast Completed; kics Completed",
             "successful": True,
-            "severity_counts": {"critical": 1, "medium": 1},
-            "engine_counts": {"sca": 1, "kics": 1},
+            "severity_counts": {"critical": 1, "high": 2, "medium": 1},
+            "engine_counts": {"sca": 2, "sast": 1, "kics": 1},
             "highest_severity": "critical",
         },
         "findings": deepcopy(_CHECKMARX_FINDINGS),
@@ -177,7 +256,7 @@ def _build_checkmarx_report_payload(*, include_archive: bool) -> dict[str, Any]:
         payload["request"].update(
             {
                 "source_path": f"./{_MOCK_DEMO_PROJECT_ROOT}",
-                "scan_types": ["sca", "kics"],
+                "scan_types": ["sast", "sca", "kics"],
                 "poll_interval": 15,
                 "poll_timeout": 7200,
                 "keep_archive": False,
@@ -265,14 +344,15 @@ _JENKINS_FIXTURE = {
         "artifact_found": True,
         "artifact_name": "checkmarx-ast-results.json",
         "report_kind": "json_object",
-        "report_total_findings": 2,
+            "report_total_findings": 4,
         "detail_source": "mock_report",
         "detailed_findings_available": True,
-        "detailed_findings_count": 2,
+            "detailed_findings_count": 4,
     },
     "report": {
-        "TotalIssues": 2,
+        "TotalIssues": 4,
         "CriticalIssues": 1,
+        "HighIssues": 2,
         "MediumIssues": 1,
         "RiskStyle": "critical",
         "RiskMsg": "Critical Risk",
@@ -283,7 +363,7 @@ _JENKINS_FIXTURE = {
         "BaseURI": "https://us.ast.checkmarx.net/projects/demo-project-id/scans?id=demo-scan-id&branch=release_1",
         "ProjectName": "demo-providerportal-web",
         "BranchName": "release_1",
-        "EnginesEnabled": ["sca", "kics"],
+        "EnginesEnabled": ["sca", "sast", "kics"],
         "Policies": {"status": "NONE", "breakBuild": False, "policies": None},
     },
     "agent_report": {
@@ -296,16 +376,16 @@ _JENKINS_FIXTURE = {
         "risk_message": "Critical Risk",
         "created_at": "2026-04-10T09:30:00Z",
         "base_uri": "https://us.ast.checkmarx.net/projects/demo-project-id/scans?id=demo-scan-id&branch=release_1",
-        "engines_enabled": ["sca", "kics"],
+        "engines_enabled": ["sca", "sast", "kics"],
         "policies": {"status": "NONE", "breakBuild": False, "policies": None},
         "detail_source": "mock_report",
         "detailed_findings_available": True,
         "artifact_vulnerability_summary": {
-            "total_findings": 2,
+            "total_findings": 4,
             "highest_severity": "critical",
         },
         "api_vulnerability_summary": {
-            "total_findings": 2,
+            "total_findings": 4,
             "highest_severity": "critical",
         },
         "normalized_scan": {
@@ -321,6 +401,13 @@ _JENKINS_FIXTURE = {
                 "location": f"{_MOCK_DEMO_PACKAGE_JSON}:12",
                 "vulnerability_count": 1,
                 "recommended_version": "1.12.2",
+            },
+            {
+                "type": "sast",
+                "severity": "high",
+                "title": "OS Command Injection",
+                "location": f"{_MOCK_DEMO_SERVER}:15",
+                "vulnerability_count": 1,
             }
         ],
         "top_fix_targets": [
@@ -329,6 +416,11 @@ _JENKINS_FIXTURE = {
                 "recommended_version": "1.12.2",
                 "reason": "Clears the highest-severity dependency issue in the demo project.",
                 "files": [_MOCK_DEMO_PACKAGE_JSON, _MOCK_DEMO_PACKAGE_LOCK],
+            },
+            {
+                "target": "/admin/run diagnostics route",
+                "reason": "Removes the mock source-code command injection path in the demo app.",
+                "files": [_MOCK_DEMO_SERVER],
             }
         ],
         "vulnerabilities": deepcopy(_CHECKMARX_FINDINGS),
@@ -417,6 +509,11 @@ _SONAR_REMOTE_REPORT = {
     "report_type": "coverage_improvement",
     "generated_at": utc_now_iso(),
     "access_mode": "authenticated",
+    "authentication": {
+        "token_configured": True,
+        "token_valid": True,
+        "anonymous_fallback_used": False,
+    },
     "project_summary": {
         "project_key": "demo-providerportal-web",
         "project_name": "Demo Provider Portal Web",
@@ -431,6 +528,83 @@ _SONAR_REMOTE_REPORT = {
         "total_files_analyzed": 12,
         "total_files_with_uncovered_lines": 5,
         "total_files_with_executable_coverage": 10,
+    },
+    "analysis_context": {
+        "scope_type": "project",
+        "requested_scope": {
+            "project_key": "demo-providerportal-web",
+            "branch": "",
+            "pull_request": "",
+        },
+        "resolved_scope": {
+            "project_key": "demo-providerportal-web",
+            "branch": "release_1",
+            "pull_request": "",
+            "analysis_date": "2026-04-10T09:45:00+0000",
+            "quality_gate_status": "OK",
+        },
+        "branch": {
+            "lookup_attempted": True,
+            "requested": "",
+            "matched": True,
+            "resolved": "release_1",
+            "is_main": True,
+            "analysis_date": "2026-04-10T09:45:00+0000",
+            "quality_gate_status": "OK",
+        },
+        "notes": [],
+    },
+    "quality_gate": {
+        "source": "sonar_remote_analysis",
+        "evaluated_remotely": True,
+        "scope_type": "project",
+        "status": "pass",
+        "current_status": "OK",
+        "would_pass": True,
+        "coverage_threshold_pct": 80.0,
+        "overall_coverage_pct": 71.4,
+        "meets_requested_coverage_threshold": False,
+        "project_key": "demo-providerportal-web",
+        "resolved_branch": "release_1",
+        "resolved_pull_request": "",
+        "analysis_date": "2026-04-10T09:45:00+0000",
+        "ignored_conditions": False,
+        "cayc_status": "non-compliant",
+        "period": {
+            "mode": "PREVIOUS_VERSION",
+            "date": "2026-04-01T09:45:00+0000",
+        },
+        "conditions": [
+            {
+                "metric": "coverage",
+                "status": "OK",
+                "comparator": "LT",
+                "threshold": 50.0,
+                "actual": 71.4,
+            },
+            {
+                "metric": "new_coverage",
+                "status": "OK",
+                "comparator": "LT",
+                "threshold": 70.0,
+                "actual": 90.2,
+            },
+        ],
+        "failing_conditions": [],
+    },
+    "decision_summary": {
+        "status": "pass",
+        "source": "sonar_quality_gate",
+        "scope_type": "project",
+        "project_key": "demo-providerportal-web",
+        "branch_name": "release_1",
+        "pull_request": "",
+        "quality_gate_status": "OK",
+        "would_pass_quality_gate": True,
+        "requested_coverage_threshold_pct": 80.0,
+        "overall_coverage_pct": 71.4,
+        "meets_requested_coverage_threshold": False,
+        "message": "SonarQube quality gate is passing for project 'demo-providerportal-web'.",
     },
     "files": [
         {
@@ -576,6 +750,79 @@ _SONAR_LOCAL_REPORT = {
     "workspace_root": ".",
     "test_command": "python -m coverage run -m pytest",
     "source_paths": ["src"],
+    "quality_gate": {
+        "mode": "sonar_quality_gate_prediction",
+        "evaluated_locally": True,
+        "status": "pass",
+        "would_pass": True,
+        "coverage_threshold_pct": 80.0,
+        "overall_coverage_pct": 86.0,
+        "failing_conditions": [],
+        "files_below_threshold": [
+            {
+                "file_path": "src/demo.py",
+                "file_name": "demo.py",
+                "coverage_pct": 66.67,
+                "uncovered_lines_count": 3,
+                "uncovered_line_numbers": [5, 6, 7],
+            }
+        ],
+        "limitations": [
+            "This is a local pre-push quality-gate prediction based on coverage.py results.",
+            "Final SonarQube pipeline results can still differ because of exclusions, imported report paths, or additional server-side gate conditions.",
+        ],
+        "sonar_prediction_status": "unknown",
+        "sonar_prediction_would_pass": None,
+    },
+    "sonar_project": {
+        "lookup_attempted": True,
+        "matched": True,
+        "query_used": "CheckmarxIntegration",
+        "match_strategy": "exact_name",
+        "project_key": "demo-providerportal-web",
+        "project_name": "Demo Provider Portal Web",
+        "branch_name": "release_1",
+        "attempts": [
+            {
+                "query": "CheckmarxIntegration",
+                "strategy": "search",
+                "candidate_count": 1,
+                "best_score": 95,
+                "best_match_strategy": "exact_name",
+            }
+        ],
+    },
+    "sonar_quality_gate": {
+        "project_key": "demo-providerportal-web",
+        "current_status": "ERROR",
+        "ignored_conditions": False,
+        "prediction_status": "unknown",
+        "would_pass": None,
+        "evaluated_conditions": [
+            {
+                "metric": "coverage",
+                "comparator": "LT",
+                "threshold": 80.0,
+                "local_actual": 86.0,
+                "remote_actual": 71.4,
+                "remote_status": "ERROR",
+                "status": "pass",
+            }
+        ],
+        "unsupported_conditions": [
+            {
+                "metric": "new_coverage",
+                "comparator": "LT",
+                "threshold": 80.0,
+                "remote_status": "ERROR",
+                "reason": "Condition cannot be evaluated locally from coverage.py metrics.",
+            }
+        ],
+        "notes": [
+            "This prediction evaluates only SonarQube quality gate conditions that can be derived from local coverage.py metrics.",
+            "Unsupported gate conditions still require a real Sonar analysis to determine the final gate result.",
+        ],
+    },
     "files": [
         {
             "file_key": "src/demo.py",
@@ -670,6 +917,7 @@ def _update_demo_project_metadata(payload: dict[str, Any], *, source: str = "") 
     managed_files = []
     for file_name in ("package.json", "package-lock.json", "Dockerfile"):
         managed_files.append(f"{resolved_root.rstrip('/')}/{file_name}")
+    managed_files.append(f"{resolved_root.rstrip('/')}/src/server.js")
     demo_project["managed_files"] = managed_files
 
 
@@ -743,6 +991,8 @@ def load_mock_jenkins_payload(*, include_raw: bool, profile: str | None = None, 
 
 
 def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, project: str = "", branch: str = "", file_path: str = "", file_key: str = "", coverage_threshold: float | None = None, local_working_directory: str = "", compare_with_remote: bool = False) -> dict[str, Any]:
+    if operation == "local_quality_gate":
+        operation = "local_report"
     if operation == "access_probe":
         payload = deepcopy(_SONAR_ACCESS_PROBE)
     elif operation == "projects":
@@ -760,8 +1010,50 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
         project_summary["project_key"] = project.strip()
         if "project_name" in project_summary:
             project_summary["project_name"] = project.strip()
+    analysis_context = payload.get("analysis_context") if isinstance(payload.get("analysis_context"), dict) else None
+    if analysis_context is not None:
+        requested_scope = analysis_context.get("requested_scope") if isinstance(analysis_context.get("requested_scope"), dict) else None
+        resolved_scope = analysis_context.get("resolved_scope") if isinstance(analysis_context.get("resolved_scope"), dict) else None
+        if requested_scope is not None and project.strip():
+            requested_scope["project_key"] = project.strip()
+        if resolved_scope is not None and project.strip():
+            resolved_scope["project_key"] = project.strip()
     if project_summary is not None and branch.strip():
         project_summary["branch_name"] = branch.strip()
+        if analysis_context is not None:
+            requested_scope = analysis_context.get("requested_scope") if isinstance(analysis_context.get("requested_scope"), dict) else None
+            resolved_scope = analysis_context.get("resolved_scope") if isinstance(analysis_context.get("resolved_scope"), dict) else None
+            branch_context = analysis_context.get("branch") if isinstance(analysis_context.get("branch"), dict) else None
+            if requested_scope is not None:
+                requested_scope["branch"] = branch.strip()
+            if resolved_scope is not None:
+                resolved_scope["branch"] = branch.strip()
+            if branch_context is not None:
+                branch_context["requested"] = branch.strip()
+                branch_context["resolved"] = branch.strip()
+    quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else None
+    decision_summary = payload.get("decision_summary") if isinstance(payload.get("decision_summary"), dict) else None
+    if quality_gate is not None:
+        quality_gate["coverage_threshold_pct"] = float(coverage_threshold or quality_gate.get("coverage_threshold_pct") or 80.0)
+        overall_coverage = project_summary.get("overall_coverage_pct") if isinstance(project_summary, dict) else None
+        if isinstance(overall_coverage, (int, float)):
+            quality_gate["overall_coverage_pct"] = float(overall_coverage)
+            quality_gate["meets_requested_coverage_threshold"] = float(overall_coverage) >= float(quality_gate["coverage_threshold_pct"])
+        if project.strip():
+            quality_gate["project_key"] = project.strip()
+        if branch.strip():
+            quality_gate["resolved_branch"] = branch.strip()
+    if decision_summary is not None:
+        decision_summary["requested_coverage_threshold_pct"] = float(coverage_threshold or decision_summary.get("requested_coverage_threshold_pct") or 80.0)
+        if isinstance(project_summary, dict):
+            decision_summary["project_key"] = project_summary.get("project_key")
+            decision_summary["branch_name"] = project_summary.get("branch_name")
+            decision_summary["pull_request"] = project_summary.get("pull_request")
+            decision_summary["overall_coverage_pct"] = project_summary.get("overall_coverage_pct")
+        if quality_gate is not None:
+            decision_summary["quality_gate_status"] = quality_gate.get("current_status")
+            decision_summary["would_pass_quality_gate"] = quality_gate.get("would_pass")
+            decision_summary["meets_requested_coverage_threshold"] = quality_gate.get("meets_requested_coverage_threshold")
     if operation == "file_detail":
         file_entry = payload.get("file") if isinstance(payload.get("file"), dict) else {}
         resolved_path = file_path.strip() or file_entry.get("file_path") or "src/checkmarx_dscan/interfaces/agents/common.py"
@@ -778,10 +1070,19 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
     if operation == "local_report":
         if coverage_threshold is not None:
             payload["threshold_pct"] = float(coverage_threshold)
+            quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else None
+            if quality_gate is not None:
+                quality_gate["coverage_threshold_pct"] = float(coverage_threshold)
             overall = payload.get("project_summary", {}).get("overall_coverage_pct")
             if isinstance(overall, (int, float)):
                 payload["would_meet_threshold"] = float(overall) >= float(coverage_threshold)
                 payload["predicted_sonar_outcome"] = "pass" if payload["would_meet_threshold"] else "fail"
+                if quality_gate is not None:
+                    quality_gate["would_pass"] = payload["would_meet_threshold"]
+                    quality_gate["status"] = payload["predicted_sonar_outcome"]
+            if quality_gate is not None and "sonar_quality_gate" in payload and isinstance(payload["sonar_quality_gate"], dict):
+                quality_gate["sonar_prediction_status"] = payload["sonar_quality_gate"].get("prediction_status")
+                quality_gate["sonar_prediction_would_pass"] = payload["sonar_quality_gate"].get("would_pass")
         if local_working_directory.strip():
             payload["workspace_root"] = local_working_directory.strip()
         if compare_with_remote:

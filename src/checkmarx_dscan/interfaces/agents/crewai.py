@@ -153,7 +153,7 @@ else:
 			return run_jenkins_artifact_tool(**kwargs)
 
 	class SonarToolInput(BaseModel):
-		operation: str = Field(default="remote_report", description="Sonar operation to run. Allowed values: access_probe, projects, remote_report, file_detail, local_report.")
+		operation: str = Field(default="remote_report", description="Sonar operation to run. Allowed values: access_probe, projects, remote_report, file_detail, local_report, local_quality_gate.")
 		project: str = Field(default="", description="Sonar project key for remote_report, file_detail, or local_report comparison.")
 		base_url: str = Field(default="", description="Optional override for SONAR_BASE_URL.")
 		token: str = Field(default="", description="Optional override for SONAR_TOKEN.")

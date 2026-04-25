@@ -29,7 +29,7 @@ SERVER_INSTRUCTIONS = (
 	"agent_report.vulnerabilities or findings. In projects mode, use matches and project_resolution.best_match to choose "
 	"the correct project before requesting a report. If native Checkmarx payload detail is required, call the tool with "
 	"include_raw=true and inspect raw.final_scan, raw.results, or raw.projects. For SonarQube coverage and local threshold prediction, "
-	"use the sonar tool with operation=access_probe, projects, remote_report, file_detail, or local_report. output_json "
+	"use the sonar tool with operation=access_probe, projects, remote_report, file_detail, local_report, or local_quality_gate. output_json "
 	"only writes a local copy; the primary result for MCP clients is the structured tool response itself."
 )
 
@@ -77,6 +77,14 @@ def _build_tool_error_response(tool_name: str, exc: Exception, **context: Any) -
 	elif "a sonar project key is required" in lower_message:
 		error_code = "missing_sonar_project"
 		error_category = "input"
+	elif "does not have a coverage report for pull request" in lower_message or ("pull request" in lower_message and "not found" in lower_message):
+		error_code = "sonar_pull_request_not_found"
+		error_category = "input"
+		remediation = [
+			"Confirm the SonarQube project key is correct.",
+			"Confirm the requested pull_request value matches an analyzed Sonar pull request key.",
+			"If this SonarQube instance does not expose pull request analysis, retry with the project or branch scope instead.",
+		]
 	elif "either file or file_key is required" in lower_message:
 		error_code = "missing_sonar_file"
 		error_category = "input"

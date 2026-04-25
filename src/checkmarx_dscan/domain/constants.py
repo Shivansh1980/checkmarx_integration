@@ -49,3 +49,8 @@ SONAR_COVERAGE_METRIC_KEYS = (
 	"new_lines_to_cover",
 	"new_uncovered_lines",
 )
+SONAR_LOCALLY_EVALUABLE_QUALITY_GATE_METRICS = (
+	"coverage",
+	"line_coverage",
+	"branch_coverage",
+)
