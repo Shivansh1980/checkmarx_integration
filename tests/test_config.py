@@ -14,6 +14,7 @@ from checkmarx_dscan.application.config.resolvers import (
     load_env_file,
     resolve_credentials,
     resolve_data_source,
+    resolve_data_source_for,
     resolve_jenkins_artifact_request,
     resolve_jenkins_credentials,
     resolve_project_scan_request,
@@ -101,6 +102,34 @@ class ResolveConfigTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CHECKMARX_DSCAN_DATA_SOURCE": "demo"}, clear=True):
             with self.assertRaises(CheckmarxError):
                 resolve_data_source()
+
+    def test_resolve_data_source_for_uses_per_tool_override_when_present(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CHECKMARX_DSCAN_DATA_SOURCE": "live",
+                "CHECKMARX_DSCAN_DATA_SOURCE_JENKINS": "mock",
+                "CHECKMARX_DSCAN_DATA_SOURCE_SONAR": "mock",
+            },
+            clear=True,
+        ):
+            self.assertEqual(resolve_data_source_for("checkmarx"), "live")
+            self.assertEqual(resolve_data_source_for("jenkins"), "mock")
+            self.assertEqual(resolve_data_source_for("sonar"), "mock")
+
+    def test_resolve_data_source_for_falls_back_to_global(self) -> None:
+        with mock.patch.dict(os.environ, {"CHECKMARX_DSCAN_DATA_SOURCE": "live"}, clear=True):
+            self.assertEqual(resolve_data_source_for("jenkins"), "live")
+            self.assertEqual(resolve_data_source_for("sonar"), "live")
+
+    def test_resolve_data_source_for_rejects_invalid_override(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"CHECKMARX_DSCAN_DATA_SOURCE_JENKINS": "demo"},
+            clear=True,
+        ):
+            with self.assertRaises(CheckmarxError):
+                resolve_data_source_for("jenkins")
 
     def test_load_env_file_searches_parent_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

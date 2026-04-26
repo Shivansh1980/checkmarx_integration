@@ -288,6 +288,63 @@ class AgentAdapterTests(unittest.TestCase):
 		self.assertEqual(payload["request"]["pr_number"], 112)
 		self.assertEqual(payload["job"]["url"], "http://jenkins/view/change-requests/job/PR-112")
 
+	def test_jenkins_per_tool_override_uses_mock_even_when_global_is_live(self) -> None:
+		with mock.patch.dict(
+			"os.environ",
+			{
+				"CHECKMARX_DSCAN_DATA_SOURCE": "live",
+				"CHECKMARX_DSCAN_DATA_SOURCE_JENKINS": "mock",
+			},
+			clear=True,
+		), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_jenkins_credentials") as resolve_jenkins_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.JenkinsArtifactService") as service_cls:
+			payload = execute_jenkins_artifact_tool(include_raw=False)
+
+		self.assertTrue(payload["summary"]["artifact_found"])
+		resolve_jenkins_credentials_mock.assert_not_called()
+		service_cls.assert_not_called()
+
+	def test_sonar_per_tool_override_uses_mock_even_when_global_is_live(self) -> None:
+		with mock.patch.dict(
+			"os.environ",
+			{
+				"CHECKMARX_DSCAN_DATA_SOURCE": "live",
+				"CHECKMARX_DSCAN_DATA_SOURCE_SONAR": "mock",
+			},
+			clear=True,
+		), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_sonar_credentials") as resolve_sonar_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.SonarCoverageService") as service_cls:
+			payload = execute_sonar_tool(operation="remote_report", project="demo-providerportal-web", include_raw=False)
+
+		self.assertTrue(payload["ok"])
+		self.assertEqual(payload["report_type"], "coverage_improvement")
+		resolve_sonar_credentials_mock.assert_not_called()
+		service_cls.assert_not_called()
+
+	def test_checkmarx_per_tool_override_keeps_live_when_global_is_mock(self) -> None:
+		mock_report = mock.Mock()
+		mock_report.to_dict.return_value = {"summary": {"total_findings": 0}}
+		with mock.patch.dict(
+			"os.environ",
+			{
+				"CHECKMARX_DSCAN_DATA_SOURCE": "mock",
+				"CHECKMARX_DSCAN_DATA_SOURCE_CHECKMARX": "live",
+			},
+			clear=True,
+		), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.load_env_file"), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_credentials", return_value=object()) as resolve_credentials_mock, \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.resolve_project_scan_request", return_value=object()), \
+			mock.patch("checkmarx_dscan.interfaces.agents.common.ProjectScanService") as service_cls:
+			service_cls.return_value.execute.return_value = mock_report
+			payload = execute_checkmarx_scan_tool(project="demo", include_raw=False)
+
+		self.assertEqual(payload["summary"]["total_findings"], 0)
+		resolve_credentials_mock.assert_called_once()
+		service_cls.assert_called_once()
+
 	def test_crewai_run_sonar_tool_forwards_to_json_runner(self) -> None:
 		with mock.patch("checkmarx_dscan.interfaces.agents.crewai.run_sonar_tool_json", return_value='{"ok": true}') as runner:
 			payload = run_sonar_tool(operation="projects", project_query="demo")

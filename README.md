@@ -12,6 +12,14 @@ Both flows return JSON shaped for downstream automation and agent processing.
 
 By default, the tool-facing adapters in this workspace now use bundled mock reports so demos can run without live Checkmarx, Jenkins, or Sonar access. Switch back to live systems by setting `CHECKMARX_DSCAN_DATA_SOURCE=live` in `.env` or the process environment.
 
+You can also mix live and mock per tool with these overrides (any value of `mock` or `live`):
+
+- `CHECKMARX_DSCAN_DATA_SOURCE_CHECKMARX`
+- `CHECKMARX_DSCAN_DATA_SOURCE_JENKINS`
+- `CHECKMARX_DSCAN_DATA_SOURCE_SONAR`
+
+Each override falls back to `CHECKMARX_DSCAN_DATA_SOURCE`, so you can keep Checkmarx pointed at a real tenant while demoing Jenkins and SonarQube from the bundled fixtures (no `JENKINS_JOB_URL` or `SONAR_BASE_URL` required).
+
 ## MCP client guidance
 
 If you attach this project as an MCP server to an agent client such as Cody, the client should treat the tool response itself as the primary output. `output_json` only writes a local copy for audit or later inspection; agents do not need to read files from disk unless they explicitly want persisted artifacts.

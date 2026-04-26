@@ -5,6 +5,7 @@ from typing import Any
 from ...application.config.resolvers import (
 	load_env_file,
 	resolve_data_source,
+	resolve_data_source_for,
 	resolve_credentials,
 	resolve_jenkins_artifact_request,
 	resolve_jenkins_credentials,
@@ -89,7 +90,7 @@ def _resolve_checkmarx_scan_mode(scan_mode: str, source: str) -> str:
 
 def execute_checkmarx_scan_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
-	data_source = resolve_data_source()
+	data_source = resolve_data_source_for("checkmarx")
 	include_raw = kwargs.get("include_raw", True)
 	report_profile = normalize_report_profile(kwargs.get("report_profile", REPORT_PROFILE_COMPACT))
 	source = kwargs.get("source", "")
@@ -166,7 +167,7 @@ def run_checkmarx_project_scan_tool_json(**kwargs: Any) -> str:
 
 def execute_jenkins_artifact_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
-	data_source = resolve_data_source()
+	data_source = resolve_data_source_for("jenkins")
 	include_raw = kwargs.get("include_raw", True)
 	report_profile = normalize_report_profile(kwargs.get("report_profile", REPORT_PROFILE_COMPACT))
 	if data_source == "mock":
@@ -224,7 +225,7 @@ def run_jenkins_artifact_tool_json(**kwargs: Any) -> str:
 def execute_sonar_tool(**kwargs: Any) -> dict[str, Any]:
 	load_env_file(kwargs.get("env_file", ".env"))
 	operation = _resolve_sonar_operation(kwargs.get("operation", "remote_report"))
-	data_source = resolve_data_source()
+	data_source = resolve_data_source_for("sonar")
 	if data_source == "mock":
 		mock_local_metrics = kwargs.get("local_metrics")
 		if isinstance(mock_local_metrics, str) and mock_local_metrics.strip():

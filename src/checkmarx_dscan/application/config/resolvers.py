@@ -28,6 +28,33 @@ def resolve_data_source() -> str:
     return resolved
 
 
+_TOOL_DATA_SOURCE_OVERRIDES = {
+    "checkmarx": ("CHECKMARX_DSCAN_DATA_SOURCE_CHECKMARX", "CX_DSCAN_DATA_SOURCE_CHECKMARX"),
+    "jenkins": ("CHECKMARX_DSCAN_DATA_SOURCE_JENKINS", "CX_DSCAN_DATA_SOURCE_JENKINS"),
+    "sonar": ("CHECKMARX_DSCAN_DATA_SOURCE_SONAR", "CX_DSCAN_DATA_SOURCE_SONAR"),
+}
+
+
+def resolve_data_source_for(tool: str) -> str:
+    """Resolve the data source for a specific tool.
+
+    Per-tool overrides (e.g. CHECKMARX_DSCAN_DATA_SOURCE_JENKINS) take
+    precedence over the global CHECKMARX_DSCAN_DATA_SOURCE so demos can
+    keep one tool live while keeping others on mock fixtures.
+    """
+    tool_key = (tool or "").strip().lower()
+    env_keys = _TOOL_DATA_SOURCE_OVERRIDES.get(tool_key, ())
+    for env_key in env_keys:
+        raw_value = os.getenv(env_key)
+        if not raw_value or not raw_value.strip():
+            continue
+        resolved = raw_value.strip().lower().replace("-", "_")
+        if resolved not in {"mock", "live"}:
+            raise CheckmarxError(f"{env_key} must be one of: mock, live")
+        return resolved
+    return resolve_data_source()
+
+
 def resolve_credentials(
     *,
     base_url: str = "",
@@ -253,6 +280,7 @@ def resolve_jenkins_artifact_request(
 __all__ = [
     "load_env_file",
     "resolve_data_source",
+    "resolve_data_source_for",
     "resolve_credentials",
     "resolve_jenkins_artifact_request",
     "resolve_jenkins_credentials",

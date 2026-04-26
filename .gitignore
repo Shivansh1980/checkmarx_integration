@@ -35,6 +35,14 @@ dist/
 output/
 _restore_test/
 
+# Demo project Node.js artifacts
+demo/mock_providerportal_web/node_modules/
+demo/mock_providerportal_web/coverage/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # OS files
 Thumbs.db
 Desktop.ini

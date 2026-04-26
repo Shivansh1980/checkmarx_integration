@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = ROOT / "demo" / "mock_providerportal_web"
 VULNERABLE_TEMPLATE_ROOT = DEMO_ROOT / ".mock_templates" / "vulnerable"
 MANAGED_FILES = ["package.json", "package-lock.json", "Dockerfile"]
-MANAGED_FILES = ["package.json", "package-lock.json", "Dockerfile", "src/server.js"]
+MANAGED_FILES = ["package.json", "package-lock.json", "Dockerfile", "src/server.js", "src/utils.js", "tests/utils.test.js"]
 
 
 def _copy_vulnerable_baseline() -> list[Path]:
@@ -21,6 +21,9 @@ def _copy_vulnerable_baseline() -> list[Path]:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         updated_files.append(target)
+    coverage_dir = DEMO_ROOT / "coverage"
+    if coverage_dir.exists():
+        shutil.rmtree(coverage_dir, ignore_errors=True)
     return updated_files
 
 

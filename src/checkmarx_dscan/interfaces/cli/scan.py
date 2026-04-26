@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_data_source, resolve_project_scan_request, resolve_scan_request
+from ...application.config.resolvers import load_env_file, resolve_credentials, resolve_data_source, resolve_data_source_for, resolve_project_scan_request, resolve_scan_request
 from ...application.reporting.report_builder import render_console_report, render_project_scan_console_report
 from ...application.services.checkmarx_scan import CheckmarxScanService
 from ...application.services.project_scan import ProjectScanService
@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = parse_args(list(sys.argv[1:] if argv is None else argv))
 	load_env_file(args.env_file)
 	project_name = first_non_empty(args.project, args.project_name)
-	data_source = resolve_data_source()
+	data_source = resolve_data_source_for("checkmarx")
 	if data_source == "mock":
 		payload = execute_checkmarx_scan_tool(
 			project=project_name,

@@ -1,0 +1,58 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+  }
+
+  environment {
+    CI = 'true'
+  }
+
+  stages {
+    stage('Install') {
+      steps {
+        dir('demo/mock_providerportal_web') {
+          sh 'npm ci || npm install'
+        }
+      }
+    }
+
+    stage('Test with coverage') {
+      steps {
+        dir('demo/mock_providerportal_web') {
+          sh 'npm test -- --ci'
+        }
+      }
+    }
+
+    stage('SonarQube analysis') {
+      when {
+        expression { return env.SONAR_BASE_URL?.trim() }
+      }
+      steps {
+        dir('demo/mock_providerportal_web') {
+          sh 'sonar-scanner -Dsonar.host.url=$SONAR_BASE_URL -Dsonar.token=$SONAR_TOKEN'
+        }
+      }
+    }
+
+    stage('Checkmarx scan artifact') {
+      steps {
+        // Placeholder stage that mirrors how a real pipeline would archive the
+        // Checkmarx One CLI JSON output so the jenkins_artifact tool can pick
+        // it up later.
+        sh 'echo "{\\"TotalIssues\\":4}" > checkmarx-ast-results.json'
+        archiveArtifacts artifacts: 'checkmarx-ast-results.json', fingerprint: true, allowEmptyArchive: true
+      }
+    }
+  }
+
+  post {
+    always {
+      dir('demo/mock_providerportal_web') {
+        archiveArtifacts artifacts: 'coverage/**', fingerprint: true, allowEmptyArchive: true
+      }
+    }
+  }
+}

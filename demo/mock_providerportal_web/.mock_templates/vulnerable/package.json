@@ -6,11 +6,34 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "test": "jest --coverage",
     "demo:reset": "python ../../tools/mock_demo_project.py reset"
   },
   "dependencies": {
     "axios": "0.16.2",
     "lodash": "4.17.15",
     "express": "4.21.2"
+  },
+  "devDependencies": {
+    "jest": "29.7.0",
+    "supertest": "6.3.4"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.mock_templates/"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/.mock_templates/"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js"
+    ],
+    "coverageReporters": [
+      "text-summary",
+      "lcov",
+      "json-summary"
+    ]
   }
 }

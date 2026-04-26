@@ -6,6 +6,7 @@ from typing import Any
 
 from ...domain.models import REPORT_PROFILE_FULL, normalize_report_profile, serialize_agent_report
 from ...shared.utils import utc_now_iso
+from .demo_coverage import load_demo_jest_coverage
 
 
 _MOCK_DEMO_PROJECT_ROOT = "demo/mock_providerportal_web"
@@ -1065,6 +1066,257 @@ def load_mock_jenkins_payload(*, include_raw: bool, profile: str | None = None, 
     return _apply_report_options(payload, include_raw=include_raw, profile=profile)
 
 
+def _build_priority_section(files: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any]:
+    ranked = []
+    for index, item in enumerate(sorted(files, key=lambda x: -int(x.get("uncovered_lines_count") or 0))[:limit]):
+        ranked.append(
+            {
+                "rank": index + 1,
+                "file_path": item.get("file_path"),
+                "file_name": item.get("file_name"),
+                "coverage_pct": item.get("coverage_pct"),
+                "uncovered_lines_count": item.get("uncovered_lines_count"),
+                "uncovered_line_numbers": item.get("uncovered_line_numbers", []),
+                "priority_score": round(float(item.get("uncovered_lines_count") or 0) * 1.0, 2),
+                "priority": "high" if (item.get("uncovered_lines_count") or 0) >= 10 else "medium" if (item.get("uncovered_lines_count") or 0) >= 1 else "informational",
+                "why": "This file carries the largest uncovered line count in the demo project."
+                if (item.get("uncovered_lines_count") or 0) >= 10
+                else "This file has uncovered branches that should be exercised before push.",
+                "suggested_test_focus": "Target uncovered branches and error paths first.",
+            }
+        )
+    return {"top_files_to_target": ranked}
+
+
+def _normalize_file_for_fixture(item: dict[str, Any]) -> dict[str, Any]:
+    uncovered_count = int(item.get("uncovered_lines_count") or 0)
+    return {
+        "file_key": f"demo-providerportal-web:{item.get('file_path')}",
+        "file_path": item.get("file_path"),
+        "file_name": item.get("file_name"),
+        "coverage_pct": item.get("coverage_pct"),
+        "line_coverage_pct": item.get("line_coverage_pct"),
+        "branch_coverage_pct": item.get("branch_coverage_pct"),
+        "total_lines_considered": item.get("total_lines_considered"),
+        "covered_lines_count": item.get("covered_lines_count"),
+        "uncovered_lines_count": uncovered_count,
+        "uncovered_line_numbers": item.get("uncovered_line_numbers", []),
+        "covered_line_numbers": item.get("covered_line_numbers", []),
+        "priority_score": round(float(uncovered_count) * 1.0, 2),
+        "priority": "high" if uncovered_count >= 10 else "medium" if uncovered_count >= 1 else "informational",
+        "should_target_first": uncovered_count >= 10,
+        "why": "This file carries the largest uncovered line count in the demo project."
+        if uncovered_count >= 10
+        else "This file has uncovered branches that should be exercised before push.",
+        "suggested_test_focus": "Target uncovered branches and error paths first.",
+        "has_executable_coverage_metrics": bool(item.get("has_executable_coverage_metrics")),
+        "line_number_quality": item.get("line_number_quality") or "unavailable",
+    }
+
+
+def _apply_demo_coverage_to_local_report(payload: dict[str, Any], demo: dict[str, Any], *, threshold: float) -> None:
+    overall = demo.get("overall_coverage_pct")
+    project_summary = payload.get("project_summary") if isinstance(payload.get("project_summary"), dict) else {}
+    project_summary.update(
+        {
+            "project_key": "demo-providerportal-web",
+            "project_name": "Demo Provider Portal Web",
+            "branch_name": project_summary.get("branch_name") or "release_1",
+            "overall_coverage_pct": overall,
+            "line_coverage_pct": demo.get("line_coverage_pct"),
+            "branch_coverage_pct": demo.get("branch_coverage_pct"),
+            "total_lines_considered": demo.get("total_lines_considered"),
+            "total_covered_lines": demo.get("total_covered_lines"),
+            "total_uncovered_lines": demo.get("total_uncovered_lines"),
+            "total_files_analyzed": demo.get("total_files_analyzed"),
+            "total_files_with_uncovered_lines": demo.get("total_files_with_uncovered_lines"),
+            "total_files_with_executable_coverage": demo.get("total_files_with_executable_coverage"),
+        }
+    )
+    payload["project_summary"] = project_summary
+    files = [_normalize_file_for_fixture(item) for item in demo.get("files", [])]
+    payload["files"] = files
+    payload["priority"] = _build_priority_section(demo.get("files", []), limit=min(10, max(1, len(files))))
+    payload["threshold_pct"] = float(threshold)
+    payload["workspace_root"] = demo.get("demo_root", payload.get("workspace_root"))
+    would_pass = isinstance(overall, (int, float)) and float(overall) >= float(threshold)
+    payload["would_meet_threshold"] = would_pass
+    payload["predicted_sonar_outcome"] = "pass" if would_pass else "fail"
+    quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else {}
+    quality_gate.update(
+        {
+            "mode": "sonar_quality_gate_prediction",
+            "evaluated_locally": True,
+            "status": "pass" if would_pass else "fail",
+            "would_pass": would_pass,
+            "coverage_threshold_pct": float(threshold),
+            "overall_coverage_pct": overall,
+            "files_below_threshold": [
+                {
+                    "file_path": item.get("file_path"),
+                    "file_name": item.get("file_name"),
+                    "coverage_pct": item.get("coverage_pct"),
+                    "uncovered_lines_count": item.get("uncovered_lines_count"),
+                    "uncovered_line_numbers": item.get("uncovered_line_numbers", []),
+                }
+                for item in demo.get("files", [])
+                if isinstance(item.get("coverage_pct"), (int, float)) and float(item["coverage_pct"]) < float(threshold)
+            ],
+            "failing_conditions": []
+            if would_pass
+            else [
+                {
+                    "metric": "coverage",
+                    "comparator": "LT",
+                    "threshold": float(threshold),
+                    "actual": overall,
+                    "status": "fail",
+                }
+            ],
+        }
+    )
+    payload["quality_gate"] = quality_gate
+    payload["test_command"] = "npm test (jest --coverage)"
+    payload["source_paths"] = ["src"]
+    payload["demo_coverage_source"] = "jest_lcov"
+
+
+def _apply_demo_coverage_to_remote_report(payload: dict[str, Any], demo: dict[str, Any], *, threshold: float) -> None:
+    overall = demo.get("overall_coverage_pct")
+    project_summary = payload.get("project_summary") if isinstance(payload.get("project_summary"), dict) else {}
+    project_summary.update(
+        {
+            "project_key": "demo-providerportal-web",
+            "project_name": "Demo Provider Portal Web",
+            "branch_name": project_summary.get("branch_name") or "release_1",
+            "overall_coverage_pct": overall,
+            "line_coverage_pct": demo.get("line_coverage_pct"),
+            "branch_coverage_pct": demo.get("branch_coverage_pct"),
+            "total_lines_considered": demo.get("total_lines_considered"),
+            "total_covered_lines": demo.get("total_covered_lines"),
+            "total_uncovered_lines": demo.get("total_uncovered_lines"),
+            "total_files_analyzed": demo.get("total_files_analyzed"),
+            "total_files_with_uncovered_lines": demo.get("total_files_with_uncovered_lines"),
+            "total_files_with_executable_coverage": demo.get("total_files_with_executable_coverage"),
+        }
+    )
+    payload["project_summary"] = project_summary
+    files = [_normalize_file_for_fixture(item) for item in demo.get("files", [])]
+    payload["files"] = files
+    payload["priority"] = _build_priority_section(demo.get("files", []), limit=min(10, max(1, len(files))))
+    would_meet = isinstance(overall, (int, float)) and float(overall) >= float(threshold)
+    quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else {}
+    quality_gate.update(
+        {
+            "source": "sonar_remote_analysis",
+            "evaluated_remotely": True,
+            "status": "pass" if would_meet else "fail",
+            "current_status": "OK" if would_meet else "ERROR",
+            "would_pass": would_meet,
+            "coverage_threshold_pct": float(threshold),
+            "overall_coverage_pct": overall,
+            "meets_requested_coverage_threshold": would_meet,
+            "project_key": "demo-providerportal-web",
+        }
+    )
+    payload["quality_gate"] = quality_gate
+    decision_summary = payload.get("decision_summary") if isinstance(payload.get("decision_summary"), dict) else {}
+    decision_summary.update(
+        {
+            "status": "pass" if would_meet else "fail",
+            "scope_type": "project",
+            "project_key": "demo-providerportal-web",
+            "branch_name": project_summary.get("branch_name"),
+            "quality_gate_status": "OK" if would_meet else "ERROR",
+            "would_pass_quality_gate": would_meet,
+            "requested_coverage_threshold_pct": float(threshold),
+            "overall_coverage_pct": overall,
+            "meets_requested_coverage_threshold": would_meet,
+            "message": (
+                f"SonarQube quality gate would {'pass' if would_meet else 'fail'} for project "
+                f"'demo-providerportal-web' at {overall}% overall coverage (threshold {threshold}%)."
+            ),
+        }
+    )
+    payload["decision_summary"] = decision_summary
+    payload["demo_coverage_source"] = "jest_lcov"
+
+
+def _apply_demo_coverage_to_local_quality_gate(payload: dict[str, Any], demo: dict[str, Any]) -> None:
+    """Auto-fill local_metrics from demo coverage when caller did not supply any."""
+    metrics = {
+        "coverage": demo.get("overall_coverage_pct"),
+        "line_coverage": demo.get("line_coverage_pct"),
+        "branch_coverage": demo.get("branch_coverage_pct"),
+    }
+    metrics = {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
+    quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else {}
+    evaluated: list[dict[str, Any]] = []
+    unsupported: list[dict[str, Any]] = []
+    for condition in quality_gate.get("definition", []):
+        metric = condition.get("metric")
+        threshold = condition.get("error_threshold")
+        comparator = (condition.get("comparator") or "").upper()
+        actual = metrics.get(metric)
+        if actual is None or threshold is None:
+            unsupported.append({
+                "metric": metric,
+                "comparator": comparator,
+                "threshold": threshold,
+                "remote_actual": condition.get("remote_actual"),
+                "remote_status": condition.get("remote_status"),
+                "reason": "Cannot derive this metric from the demo project's Jest coverage.",
+            })
+            continue
+        passes = (actual >= threshold) if comparator == "LT" else (actual <= threshold) if comparator == "GT" else (actual == threshold)
+        evaluated.append({
+            "metric": metric,
+            "comparator": comparator,
+            "threshold": threshold,
+            "local_actual": round(float(actual), 2),
+            "remote_actual": condition.get("remote_actual"),
+            "remote_status": condition.get("remote_status"),
+            "status": "pass" if passes else "fail",
+        })
+    failed = [item for item in evaluated if item["status"] == "fail"]
+    if failed:
+        status = "fail"
+        would_pass: bool | None = False
+    elif evaluated and not unsupported:
+        status = "pass"
+        would_pass = True
+    elif evaluated and unsupported:
+        status = "likely_pass_partial"
+        would_pass = None
+    else:
+        status = "needs_local_metrics"
+        would_pass = None
+    quality_gate["local_evaluation"] = {
+        "status": status,
+        "would_pass": would_pass,
+        "evaluated_conditions": evaluated,
+        "unsupported_conditions": unsupported,
+        "failing_conditions": failed,
+        "local_metrics_received": metrics,
+    }
+    quality_gate["would_pass"] = would_pass
+    quality_gate["status"] = status
+    payload["quality_gate"] = quality_gate
+    payload["demo_coverage_source"] = "jest_lcov"
+    payload["demo_uncovered_files"] = [
+        {
+            "file_path": item.get("file_path"),
+            "file_name": item.get("file_name"),
+            "coverage_pct": item.get("coverage_pct"),
+            "uncovered_lines_count": item.get("uncovered_lines_count"),
+            "uncovered_line_numbers": item.get("uncovered_line_numbers", []),
+        }
+        for item in demo.get("files", [])
+        if int(item.get("uncovered_lines_count") or 0) > 0
+    ]
+    payload.pop("measurement_instructions", None)
+
+
 def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, project: str = "", branch: str = "", file_path: str = "", file_key: str = "", coverage_threshold: float | None = None, local_working_directory: str = "", compare_with_remote: bool = False, local_metrics: dict[str, Any] | None = None) -> dict[str, Any]:
     if operation == "access_probe":
         payload = deepcopy(_SONAR_ACCESS_PROBE)
@@ -1083,6 +1335,7 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
         if branch.strip():
             payload["sonar_project"]["branch_name"] = branch.strip()
             payload["quality_gate"]["branch"] = branch.strip()
+        demo_coverage = load_demo_jest_coverage()
         if isinstance(local_metrics, dict) and local_metrics:
             normalized: dict[str, float] = {}
             for key, value in local_metrics.items():
@@ -1137,11 +1390,16 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
             payload["quality_gate"]["would_pass"] = would_pass
             payload["quality_gate"]["status"] = status
             payload.pop("measurement_instructions", None)
+        elif demo_coverage is not None:
+            _apply_demo_coverage_to_local_quality_gate(payload, demo_coverage)
         if not include_raw:
             payload.pop("raw", None)
         return payload
     else:
         payload = deepcopy(_SONAR_REMOTE_REPORT)
+        demo_coverage = load_demo_jest_coverage()
+        if demo_coverage is not None:
+            _apply_demo_coverage_to_remote_report(payload, demo_coverage, threshold=float(coverage_threshold or 80.0))
 
     payload["generated_at"] = utc_now_iso()
     project_summary = payload.get("project_summary") if isinstance(payload.get("project_summary"), dict) else None
@@ -1207,6 +1465,9 @@ def load_mock_sonar_payload(*, operation: str, include_raw: bool = False, projec
             top[0]["file_path"] = resolved_path
             top[0]["file_name"] = file_entry["file_name"]
     if operation == "local_report":
+        demo_coverage = load_demo_jest_coverage()
+        if demo_coverage is not None:
+            _apply_demo_coverage_to_local_report(payload, demo_coverage, threshold=float(coverage_threshold or 80.0))
         if coverage_threshold is not None:
             payload["threshold_pct"] = float(coverage_threshold)
             quality_gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else None
